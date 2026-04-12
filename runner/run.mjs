@@ -28,27 +28,117 @@
 import * as readline from "readline";
 import * as fs       from "fs";
 import * as path     from "path";
-import { randomUUID } from "crypto";
+import * as cryptoMod from "crypto";
+import * as http     from "http";
+import * as https    from "https";
+
+// randomUUID was added in Node 14.17 — fall back to v4 UUID via randomBytes for older Node
+function randomUUID() {
+  const bytes = cryptoMod.randomBytes(16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+
+// ---------------------------------------------------------------------------
+// HTTP helper — replaces native fetch (not available in Node < 18)
+// Returns a Promise<{ statusCode, body: string }> for non-streaming requests,
+// or calls onData(chunk) incrementally for streaming requests.
+// ---------------------------------------------------------------------------
+
+function httpRequest(url, options, body) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const mod    = parsed.protocol === "https:" ? https : http;
+    const req    = mod.request({
+      hostname: parsed.hostname,
+      port:     parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+      path:     parsed.pathname + parsed.search,
+      method:   options.method || "GET",
+      headers:  options.headers || {},
+    }, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end",  () => resolve({ statusCode: res.statusCode, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+// Streaming variant — calls onLine(line) for each newline-terminated chunk.
+// Returns a Promise<void> that resolves when the stream ends.
+function httpStreamLines(url, options, body, onLine) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const mod    = parsed.protocol === "https:" ? https : http;
+    const req    = mod.request({
+      hostname: parsed.hostname,
+      port:     parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+      path:     parsed.pathname + parsed.search,
+      method:   options.method || "GET",
+      headers:  options.headers || {},
+    }, (res) => {
+      if (res.statusCode !== 200) {
+        const chunks = [];
+        res.on("data", c => chunks.push(c));
+        res.on("end",  () => reject(new Error(`HTTP ${res.statusCode}: ${Buffer.concat(chunks).toString("utf8")}`)));
+        return;
+      }
+      let buf = "";
+      res.on("data", (chunk) => {
+        buf += chunk.toString("utf8");
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) onLine(line);
+      });
+      res.on("end", () => {
+        if (buf.trim()) onLine(buf);
+        resolve();
+      });
+    });
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-const MODEL      = process.env.SPECODE_MODEL     ?? "qwen3.5:0.8b";
-const OLLAMA_URL = process.env.OLLAMA_BASE_URL   ?? "http://localhost:11434";
-const VERBOSITY  = process.env.SPECODE_VERBOSITY ?? "medium";
+const MODEL      = process.env.SPECODE_MODEL     || "gemma2:2b";
+const OLLAMA_URL = process.env.OLLAMA_BASE_URL   || "http://localhost:11434";
+const VERBOSITY  = process.env.SPECODE_VERBOSITY || "medium";
 const SPECS_DIR  = path.resolve("specs");
 
 const isResume = process.argv[2] === "--resume";
 const arg      = process.argv[isResume ? 3 : 2];
 
-if (!arg) {
-  console.error(`
+const HELP = `
+SPECODE — spec elicitation engine
+
 Usage:
   node runner/run.mjs "your intent"
   node runner/run.mjs --resume <session-id>
-`);
-  process.exit(1);
+
+Options:
+  SPECODE_MODEL      Ollama model name  (default: gemma2:2b)
+  OLLAMA_BASE_URL    Ollama endpoint    (default: http://localhost:11434)
+  SPECODE_VERBOSITY  low|medium|high    (default: medium)
+  SPECODE_PROVIDER   claude|openai|ollama (default: ollama)
+
+Examples:
+  node runner/run.mjs "a todo app in TypeScript"
+  node runner/run.mjs --resume 225ad55d-1a48-4578-ba63-441e588e4feb
+  SPECODE_VERBOSITY=low node runner/run.mjs "a REST API in Go"
+`;
+
+if (!arg || arg === "--help" || arg === "-h") {
+  console.log(HELP);
+  process.exit(arg ? 0 : 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -103,16 +193,15 @@ const RESPONSE_SCHEMA = {
 
 async function checkOllamaHealth() {
   try {
-    const res = await fetch(`${OLLAMA_URL}/api/show`, {
+    const res = await httpRequest(`${OLLAMA_URL}/api/show`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ name: MODEL }),
-    });
-    if (!res.ok) {
+    }, JSON.stringify({ name: MODEL }));
+    if (res.statusCode !== 200) {
       throw new Error(`Model "${MODEL}" not found. Run: ollama pull ${MODEL}`);
     }
   } catch (err) {
-    if (err.message.includes("fetch failed") || err.code === "ECONNREFUSED") {
+    if (err.code === "ECONNREFUSED") {
       throw new Error(`Ollama is not running at ${OLLAMA_URL}. Start it with: ollama serve`);
     }
     throw err;
@@ -120,41 +209,33 @@ async function checkOllamaHealth() {
 }
 
 async function ollamaStream(messages, onToken) {
-  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  let full = "";
+
+  await httpStreamLines(
+    `${OLLAMA_URL}/api/chat`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+    JSON.stringify({
       model:    MODEL,
       messages,
       stream:   true,
       format:   RESPONSE_SCHEMA,
       options:  { temperature: 0.1, num_ctx: 4096 },
     }),
-  });
-
-  if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
-
-  const decoder = new TextDecoder();
-  let full = "";
-
-  for await (const chunk of res.body) {
-    const text  = decoder.decode(chunk, { stream: true });
-    const lines = text.split("\n").filter(Boolean);
-
-    for (const line of lines) {
+    (line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
       try {
-        const event = JSON.parse(line);
-        const token = event.message?.content ?? "";
+        const event = JSON.parse(trimmed);
+        const token = (event.message && event.message.content) || "";
         if (token) {
-          onToken(token);
           full += token;
+          onToken(token);
         }
-        if (event.done) return full;
       } catch {
-        // Incomplete JSON chunk — accumulate and continue
+        // Incomplete JSON line — ignore
       }
     }
-  }
+  );
 
   return full;
 }
@@ -181,7 +262,9 @@ function makeNode(label, kind) {
 function initTree(intent, verbosity) {
   const intentNode       = makeNode("Intent",       "intent");
   intentNode.value       = intent;
-  intentNode.status      = "partial";
+  // Intent starts complete — the user already stated it.
+  // The AI can add detail later but should not block on it.
+  intentNode.status      = "complete";
   const platform         = makeNode("Platform",     "platform");
   const userRoles        = makeNode("User Roles",   "user-role");
   const techStack        = makeNode("Tech Stack",   "tech-stack");
@@ -219,7 +302,7 @@ function scoreTree(tree) {
   if (!all.length) return 0;
   let total = 0, filled = 0;
   for (const n of all) {
-    const w = KIND_PRIORITY[n.kind] ?? 30;
+    const w = KIND_PRIORITY[n.kind] !== undefined ? KIND_PRIORITY[n.kind] : 30;
     total += w;
     if      (n.status === "complete") filled += w;
     else if (n.status === "partial")  filled += w * 0.5;
@@ -236,12 +319,12 @@ function analyzeGaps(tree) {
       const dep = all.find(x => x.id === depId);
       return !dep || dep.status === "partial" || dep.status === "complete" || dep.status === "n/a";
     }))
-    .sort((a, b) => (KIND_PRIORITY[b.kind] ?? 0) - (KIND_PRIORITY[a.kind] ?? 0));
+    .sort((a, b) => (KIND_PRIORITY[b.kind] || 0) - (KIND_PRIORITY[a.kind] || 0));
 
   const ambiguous = all.filter(n => n.status === "complete" && n.openQuestions.length > 0);
 
   return {
-    priorityNode:    incomplete[0] ?? ambiguous[0] ?? null,
+    priorityNode:    incomplete[0] || ambiguous[0] || null,
     incompleteNodes: incomplete,
     ambiguousNodes:  ambiguous,
     isComplete:      tree.completeness >= 85 && !incomplete.length && !ambiguous.length,
@@ -295,15 +378,20 @@ You are SPECODE, a spec elicitation engine. Fill the spec tree by asking precise
 }
 
 ## Verbosity
-${VERBOSITY_INSTRUCTIONS[verbosity] ?? VERBOSITY_INSTRUCTIONS.medium}
+${VERBOSITY_INSTRUCTIONS[verbosity] || VERBOSITY_INSTRUCTIONS.medium}
 
 ## Completeness
-"complete" = specific enough to implement. "JWT, 7-day expiry, httpOnly cookies, refresh rotation" = complete. "JWT auth" = partial.
+"complete" = specific enough to implement without asking more questions.
+- Intent node: mark complete if a clear purpose/goal is stated. "a task management app" = complete.
+- Platform: mark complete once a specific target is named. "web" = complete.
+- Tech Stack: mark complete once language and main framework are named.
+- Features: mark complete only when all sub-features are fully specified.
 
 ## Rules
 - Never ask about nodes whose dependencies are still empty.
 - Never repeat answered questions.
-- nodeUpdate is null if this is the first question (no answer yet to process).`;
+- nodeUpdate is null only on the very first turn (no user answer to process yet).
+- CRITICAL: If the intent node already has a value like "a task management app", mark it COMPLETE immediately. Do not ask for more clarification about intent unless it is genuinely ambiguous (e.g. "build something cool").`;
 }
 
 function buildTreeContext(tree, gaps) {
@@ -311,7 +399,7 @@ function buildTreeContext(tree, gaps) {
   const icons = { complete: "✓", partial: "~", empty: "○", "n/a": "-" };
 
   const nodeLines = all.map(n => {
-    const icon = icons[n.status] ?? "?";
+    const icon = icons[n.status] || "?";
     const val  = n.value ? `→ ${n.value}` : "(empty)";
     const q    = n.openQuestions.length ? ` [?? ${n.openQuestions[0]}]` : "";
     return `  ${icon} [${n.id.slice(0,8)}] ${n.kind.toUpperCase()}: ${n.label} ${val}${q}`;
@@ -345,7 +433,10 @@ function buildMessages(tree, gaps, history) {
   const instruction = gaps.isComplete
     ? `Spec complete (${tree.completeness}%). Respond with JSON: question = congratulations message, nodeUpdate = null.`
     : target
-      ? `Highest-priority gap: [${target.id.slice(0,8)}] "${target.label}" (${target.kind}, ${target.status}). Produce JSON now. If user just answered something, process it in nodeUpdate first.`
+      ? `YOU MUST ask about node [${target.id.slice(0,8)}] "${target.label}" (kind: ${target.kind}, current status: ${target.status}).
+Set targetNodeId to "${target.id.slice(0,8)}".
+If the user's last message answered something else, extract that in nodeUpdate first, then ask about [${target.id.slice(0,8)}].
+Do NOT ask about any other node.`
       : `Determine the most important unknown and ask about it.`;
 
   messages.push({ role: "user", content: instruction });
@@ -365,9 +456,9 @@ function parseLLMResponse(raw) {
   const nu = p.nodeUpdate;
   return {
     question:              p.question,
-    targetNodeId:          p.targetNodeId ?? null,
+    targetNodeId:          p.targetNodeId != null ? p.targetNodeId : null,
     nodeUpdate:            nu ? {
-      nodeId:        String(nu.nodeId ?? ""),
+      nodeId:        String(nu.nodeId != null ? nu.nodeId : ""),
       value:         nu.value != null ? String(nu.value) : null,
       status:        ["empty","partial","complete","n/a"].includes(nu.status) ? nu.status : "partial",
       openQuestions: Array.isArray(nu.openQuestions) ? nu.openQuestions.map(String) : [],
@@ -375,11 +466,11 @@ function parseLLMResponse(raw) {
     newChildren:           Array.isArray(p.newChildren)
       ? p.newChildren.filter(c => c.parentId && c.label).map(c => ({
           parentId: String(c.parentId), label: String(c.label),
-          kind: c.kind ?? "feature", value: c.value ?? null,
+          kind: c.kind || "feature", value: c.value != null ? c.value : null,
         }))
       : [],
-    sharedPatternDetected: p.sharedPatternDetected ?? null,
-    reasoning:             p.reasoning ?? "",
+    sharedPatternDetected: p.sharedPatternDetected != null ? p.sharedPatternDetected : null,
+    reasoning:             p.reasoning || "",
   };
 }
 
@@ -391,7 +482,7 @@ function parseLLMResponse(raw) {
 function applyMutations(tree, parsed) {
   const mutations = [];
 
-  if (parsed.nodeUpdate?.nodeId) {
+  if (parsed.nodeUpdate && parsed.nodeUpdate.nodeId) {
     const { nodeId, value, status, openQuestions } = parsed.nodeUpdate;
     tree = { ...tree, nodes: patchNodes(tree.nodes, nodeId, { value, status, openQuestions }) };
     mutations.push({ type: "node:update", nodeId, value, status });
@@ -401,7 +492,7 @@ function applyMutations(tree, parsed) {
     const newChild = {
       ...makeNode(child.label, child.kind),
       status: child.value ? "partial" : "empty",
-      value:  child.value ?? null,
+      value:  child.value != null ? child.value : null,
     };
     tree = { ...tree, nodes: insertChild(tree.nodes, child.parentId, newChild) };
     mutations.push({ type: "node:add", parentId: child.parentId, nodeId: newChild.id, label: child.label });
@@ -505,7 +596,7 @@ function renderTree(tree) {
   const lines = [];
   function rn(node, depth) {
     const indent = "  ".repeat(depth);
-    const icon   = icons[node.status] ?? "?";
+    const icon   = icons[node.status] || "?";
     const val    = node.value   ? `${C.dim}: ${node.value.slice(0, 60)}${C.reset}` : "";
     const ref    = node.sharedRef ? ` ${C.blue}[→shared]${C.reset}` : "";
     lines.push(`${indent}${icon} ${C.white}${node.label}${C.reset}${val}${ref}`);
@@ -523,7 +614,7 @@ function renderTree(tree) {
 }
 
 function divider() {
-  process.stdout.write(C.gray + "─".repeat(process.stdout.columns ?? 80) + C.reset + "\n");
+  process.stdout.write(C.gray + "─".repeat(process.stdout.columns || 80) + C.reset + "\n");
 }
 
 function header(tree, sessionId) {
@@ -724,10 +815,15 @@ async function run() {
   }
 
   rl.close();
+  persistSession(sessionId, { ...meta, turns: turnIndex, completeness: tree.completeness, updatedAt: tree.updatedAt });
   console.log(`\n${C.cyan}Session saved → specs/${sessionId}/${C.reset}\n`);
 }
 
 run().catch(err => {
+  if ((err.message && err.message.includes("readline was closed")) || err.code === "ERR_USE_AFTER_CLOSE") {
+    // stdin closed (e.g. piped input finished) — not a crash
+    process.exit(0);
+  }
   console.error(`\n${C.red}Fatal:${C.reset} ${err.message}\n`);
   process.exit(1);
 });

@@ -87,7 +87,9 @@ export function initTree(
 ): SpecTree {
   const intentNode = makeNode("Intent", "intent");
   intentNode.value  = rawIntent;
-  intentNode.status = "partial";
+  // Intent starts complete — the user stated it when they launched the session.
+  // The AI can refine it later but Platform is the next logical question.
+  intentNode.status = "complete";
 
   const platform     = makeNode("Platform", "platform");
   const userRoles    = makeNode("User Roles", "user-role");
