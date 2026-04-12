@@ -332,9 +332,14 @@ function analyzeGaps(tree) {
   };
 }
 
+// Match by full ID or 8-char prefix — the model returns prefixes
+function nodeMatches(node, nodeId) {
+  return node.id === nodeId || node.id.startsWith(nodeId);
+}
+
 function patchNodes(nodes, nodeId, patch) {
   return nodes.map(n => {
-    if (n.id === nodeId) return { ...n, ...patch, updatedAt: new Date().toISOString() };
+    if (nodeMatches(n, nodeId)) return { ...n, ...patch, updatedAt: new Date().toISOString() };
     if (n.children.length) return { ...n, children: patchNodes(n.children, nodeId, patch) };
     return n;
   });
@@ -342,7 +347,7 @@ function patchNodes(nodes, nodeId, patch) {
 
 function insertChild(nodes, parentId, child) {
   return nodes.map(n => {
-    if (n.id === parentId) return { ...n, children: [...n.children, child] };
+    if (nodeMatches(n, parentId)) return { ...n, children: [...n.children, child] };
     if (n.children.length) return { ...n, children: insertChild(n.children, parentId, child) };
     return n;
   });
@@ -858,6 +863,22 @@ async function run() {
     console.log(renderTree(tree));
     divider();
 
+    // Assumption phase: auto-commit — no user input needed, the node is declared complete
+    if (turnMode.phase === "assume") {
+      const { tree: mutated, mutations } = applyMutations(tree, parsed);
+      tree = mutated;
+      history.push({ role: "ai", content: parsed.question, nodeId: turnMode.targetNodeId });
+      persistTree(sessionId, tree);
+      aiLogEntry.mutations = mutations;
+      appendConversation(sessionId, aiLogEntry);
+      turnIndex++;
+      persistSession(sessionId, { ...meta, turns: turnIndex, completeness: tree.completeness, verbosity: tree.verbosity, updatedAt: tree.updatedAt });
+      divider();
+      console.log(renderTree(tree));
+      divider();
+      continue; // no user input — advance to next node
+    }
+
     // Get user input
     const userInput = await ask(`\n${C.white}You:${C.reset} `);
     const trimmed   = userInput.trim();
@@ -877,12 +898,11 @@ async function run() {
       continue;
     }
 
-    // Record that this node was asked (increment attempts counter)
-    // Use turnMode.targetNodeId — the engine-owned target, not the model's self-reported one
+    // Increment attempt counter on the engine-owned target node
     const engineTargetId = turnMode.targetNodeId;
     if (engineTargetId) {
       const all    = flattenNodes(tree.nodes);
-      const target = all.find(n => n.id.startsWith(engineTargetId));
+      const target = all.find(n => nodeMatches(n, engineTargetId));
       if (target) {
         const attempts = (target.attempts || 0) + 1;
         tree = { ...tree, nodes: patchNodes(tree.nodes, target.id, { attempts }) };
@@ -907,7 +927,7 @@ async function run() {
     appendConversation(sessionId, {
       turnIndex, role: "user",
       content:      trimmed,
-      targetNodeId: parsed.targetNodeId,
+      targetNodeId: engineTargetId,
       timestamp:    new Date().toISOString(),
     });
 
