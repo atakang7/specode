@@ -598,6 +598,12 @@ function applyMutations(tree, parsed) {
   }
 
   for (const child of parsed.newChildren) {
+    // Never add children to a node that's already complete — it's done, no sub-questions needed
+    const allNodes  = flattenNodes(tree.nodes);
+    const parentNode = allNodes.find(n => nodeMatches(n, child.parentId));
+    if (parentNode && parentNode.status === "complete") continue;
+    // Don't add duplicate children (same label already exists under this parent)
+    if (parentNode && parentNode.children.some(c => c.label.toLowerCase() === child.label.toLowerCase())) continue;
     const newChild = {
       ...makeNode(child.label, child.kind),
       status: child.value ? "partial" : "empty",
