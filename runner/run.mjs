@@ -451,58 +451,100 @@ TOP GAPS:
 ${gapList || "  (none)"}`;
 }
 
-// Count how many times a specific node has been asked in conversation history
-function countNodeAttempts(nodeIdPrefix, history) {
-  let count = 0;
-  for (const entry of history) {
-    if (entry.role === "ai" && entry.nodeId && String(entry.nodeId).startsWith(nodeIdPrefix)) {
-      count++;
-    }
-  }
-  return count;
-}
 
-function buildMessages(tree, gaps, history) {
+// ---------------------------------------------------------------------------
+// Turn modes — the engine decides what the model must do this turn.
+// The model never decides what node to target or whether an answer is done.
+// ---------------------------------------------------------------------------
+
+function buildMessages(tree, gaps, history, turnMode) {
   const messages = [
     { role: "system", content: buildSystemPrompt(tree.verbosity) },
     { role: "user",   content: buildTreeContext(tree, gaps) },
-    ...history.map(t => ({ role: t.role === "ai" ? "assistant" : "user", content: t.content })),
+    // Only include the last 6 history entries to keep context tight
+    ...history.slice(-6).map(t => ({ role: t.role === "ai" ? "assistant" : "user", content: t.content })),
   ];
 
-  const target = gaps.priorityNode;
-
-  // Detect if the last user message was answering the current target node
-  const lastUserMsg  = history.length >= 2 ? history[history.length - 1] : null;
-  const lastAiMsg    = history.length >= 2 ? history[history.length - 2] : null;
-  const lastAnswered = lastUserMsg && lastUserMsg.role === "user" && lastAiMsg && lastAiMsg.role === "ai"
-    && target && lastAiMsg.nodeId && String(lastAiMsg.nodeId).startsWith(target.id.slice(0, 8));
-
-  // How many times has this node been asked — triggers assumption rule at 3
-  const attempts = target ? countNodeAttempts(target.id.slice(0, 8), history) : 0;
-  const mustAssume = attempts >= 3;
-
-  const instruction = gaps.isComplete
-    ? `Spec complete (${tree.completeness}%). Respond with JSON: question = congratulations message, nodeUpdate = null.`
-    : target
-      ? mustAssume
-        ? `Node [${target.id.slice(0,8)}] "${target.label}" has been asked ${attempts} times with no usable answer.
-APPLY THE 3-STRIKE RULE:
-1. Choose the most reasonable default for "${target.label}" given the context of this application.
-2. Set nodeUpdate: status="complete", value="assumed: <your default> — reason: <why this default fits>".
-3. Ask about the NEXT node — do NOT ask about [${target.id.slice(0,8)}] again.`
-        : lastAnswered
-          ? `The user just answered the question about [${target.id.slice(0,8)}] "${target.label}".
-Their answer: "${lastUserMsg.content}"
-Evaluate the answer against the completeness standard for verbosity=${tree.verbosity}:
-- If the answer is specific enough per the depth rules → set status="complete", value=<their exact answer>.
-- If more detail is needed per the depth rules → set status="partial", value=<their answer so far>, then ask the ONE most important follow-up question about [${target.id.slice(0,8)}].
-- Do NOT ask about a different node until this one is complete.`
-          : `Ask about node [${target.id.slice(0,8)}] "${target.label}" (kind: ${target.kind}, status: ${target.status}, asked: ${attempts}/3 times).
-Set targetNodeId to "${target.id.slice(0,8)}". Do NOT ask about any other node.`
-      : `Determine the most important unknown and ask about it.`;
-
-  messages.push({ role: "user", content: instruction });
+  messages.push({ role: "user", content: turnMode.instruction });
   return messages;
+}
+
+// Build the instruction for this turn — engine-owned, model just executes.
+// turnMode carries: { instruction, targetNodeId, phase: "ask"|"followup"|"assume"|"complete" }
+function buildTurnMode(tree, gaps, history) {
+  if (gaps.isComplete) {
+    return {
+      phase: "complete",
+      targetNodeId: null,
+      instruction: `The spec is complete at ${tree.completeness}% coverage. Respond with a brief congratulations. Set nodeUpdate to null, newChildren to [], sharedPatternDetected to null.`,
+    };
+  }
+
+  const target   = gaps.priorityNode;
+  if (!target) {
+    return {
+      phase: "ask",
+      targetNodeId: null,
+      instruction: `Ask about the most important unknown node in the spec tree.`,
+    };
+  }
+
+  const nodeId8   = target.id.slice(0, 8);
+  const attempts  = target.attempts || 0;
+
+  // 3-strike rule: force assumption after 3 unanswered attempts
+  if (attempts >= 3) {
+    return {
+      phase: "assume",
+      targetNodeId: nodeId8,
+      instruction:
+`Node [${nodeId8}] "${target.label}" has been asked 3 times with no usable answer.
+You MUST apply the 3-strike assumption rule NOW:
+1. Choose the most reasonable default value for "${target.label}" given this app's context.
+2. In nodeUpdate: set nodeId="${nodeId8}", status="complete", value="assumed: <your choice> — reason: <why this fits the app>".
+3. In question: write ONE sentence telling the user what you assumed and why.
+Do NOT ask another question about [${nodeId8}]. Set targetNodeId="${nodeId8}".`,
+    };
+  }
+
+  // Check if the last user turn was answering this exact node
+  const lastUserMsg = history.length >= 1 ? history[history.length - 1] : null;
+  const lastAiMsg   = history.length >= 2 ? history[history.length - 2] : null;
+  const justAnswered = lastUserMsg && lastUserMsg.role === "user"
+    && lastAiMsg && lastAiMsg.role === "ai"
+    && lastAiMsg.nodeId === nodeId8;
+
+  if (justAnswered) {
+    // Model must process the answer, decide if complete per verbosity depth, or ask ONE follow-up
+    return {
+      phase: "followup",
+      targetNodeId: nodeId8,
+      instruction:
+`The user just answered your question about [${nodeId8}] "${target.label}" (${target.kind}).
+Their answer: "${lastUserMsg.content}"
+Current accumulated value: "${target.value || "(none)"}"
+
+Apply the depth rule for verbosity=${tree.verbosity}:
+${tree.verbosity === "low"   ? `LOW: accept this answer as-is. Set status="complete", value="${lastUserMsg.content}". Ask about the NEXT node.` : ""}
+${tree.verbosity === "medium" ? `MEDIUM: is "${lastUserMsg.content}" specific enough to implement? If yes → complete it. If it's still vague (e.g. just a category name) → ask ONE follow-up, stay on [${nodeId8}].` : ""}
+${tree.verbosity === "high"  ? `HIGH: is every implementation detail for "${target.label}" now known? (framework+version+routing+deployment for platform, etc.) If yes → complete it. If any critical detail is missing → ask ONE targeted follow-up, stay on [${nodeId8}].` : ""}
+
+CRITICAL: set targetNodeId="${nodeId8}" in your response.
+If marking complete: set nodeUpdate.status="complete" and nodeUpdate.value=<the full accumulated answer for this node>.
+If asking follow-up: set nodeUpdate.status="partial" and nodeUpdate.value=<what is known so far>.`,
+    };
+  }
+
+  // Fresh question about this node
+  return {
+    phase: "ask",
+    targetNodeId: nodeId8,
+    instruction:
+`Ask exactly ONE question to fill node [${nodeId8}] "${target.label}" (kind: ${target.kind}).
+Set targetNodeId="${nodeId8}". Set nodeUpdate=null (no answer to process yet).
+The question must be concrete and focused — not "tell me about X" but "what specific X?"
+${attempts > 0 ? `This node has been asked ${attempts} time(s) before. Ask from a different angle.` : ""}`,
+  };
 }
 
 function parseLLMResponse(raw) {
@@ -746,9 +788,10 @@ async function run() {
   const ask = p => new Promise(res => rl.question(p, res));
 
   while (true) {
-    const gaps = analyzeGaps(tree);
+    const gaps     = analyzeGaps(tree);
+    const turnMode = buildTurnMode(tree, gaps, history);
 
-    if (gaps.isComplete) {
+    if (turnMode.phase === "complete") {
       console.log(`\n${C.green}${C.bold}Spec complete!${C.reset} Coverage: ${tree.completeness}%`);
       console.log(`${C.gray}Full spec: specs/${sessionId}/tree.json${C.reset}`);
       break;
@@ -764,7 +807,7 @@ async function run() {
 
     try {
       rawResponse = await ollamaStream(
-        buildMessages(tree, gaps, history),
+        buildMessages(tree, gaps, history, turnMode),
         (token) => {
           if (firstToken) {
             process.stdout.write(`\r${" ".repeat(25)}\r`);
@@ -834,15 +877,15 @@ async function run() {
       continue;
     }
 
-    // Apply user's raw answer to the target node immediately and increment attempt counter
-    if (parsed.targetNodeId) {
+    // Record that this node was asked (increment attempts counter)
+    // Use turnMode.targetNodeId — the engine-owned target, not the model's self-reported one
+    const engineTargetId = turnMode.targetNodeId;
+    if (engineTargetId) {
       const all    = flattenNodes(tree.nodes);
-      const target = all.find(n => n.id.startsWith(parsed.targetNodeId) || n.id === parsed.targetNodeId);
+      const target = all.find(n => n.id.startsWith(engineTargetId));
       if (target) {
         const attempts = (target.attempts || 0) + 1;
-        tree = { ...tree, nodes: patchNodes(tree.nodes, target.id, {
-          value: trimmed, status: "partial", openQuestions: [], attempts,
-        }) };
+        tree = { ...tree, nodes: patchNodes(tree.nodes, target.id, { attempts }) };
       }
     }
 
@@ -851,7 +894,7 @@ async function run() {
     tree = mutated;
 
     // Update history (used as LLM context on next turn)
-    history.push({ role: "ai",   content: parsed.question, nodeId: parsed.targetNodeId });
+    history.push({ role: "ai",   content: parsed.question, nodeId: turnMode.targetNodeId });
     history.push({ role: "user", content: trimmed });
 
     // ── Persist everything atomically ────────────────────────────────────────
