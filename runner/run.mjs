@@ -255,6 +255,7 @@ function makeNode(label, kind) {
     id: randomUUID(), label, kind,
     status: "empty", value: null,
     children: [], dependsOn: [], openQuestions: [],
+    attempts: 0,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -351,47 +352,71 @@ function insertChild(nodes, parentId, child) {
 // Prompts (mirrors core/src/prompts)
 // ---------------------------------------------------------------------------
 
-const VERBOSITY_INSTRUCTIONS = {
-  low:    `LOW: Keywords only. Bracket choices. "auth? [JWT / session / OAuth]"`,
-  medium: `MEDIUM: One sentence context per option. Show the impact on the spec.`,
-  high:   `HIGH: Full context, tradeoffs, downstream implications. 3-5 sentences.`,
+// ---------------------------------------------------------------------------
+// Verbosity controls SPECIFICATION DEPTH — how many sub-questions per node.
+//
+// low:    one answer → complete. Fast broad strokes. "web" is enough.
+// medium: one level of follow-up. "web" → "which framework?" then done.
+// high:   drill until code-generatable. "web" → framework → version →
+//         routing strategy → deployment target → env config. No assumptions.
+// ---------------------------------------------------------------------------
+
+const VERBOSITY_DEPTH = {
+  low: `
+DEPTH: low — accept the first answer given for any node. Mark it complete immediately.
+Do not ask follow-up questions on a node that already has a value.
+"web" = Platform complete. "PostgreSQL" = DB complete. Move on.`,
+
+  medium: `
+DEPTH: medium — ask ONE follow-up if the answer is too broad to be actionable.
+"web" → ask framework once → then mark complete.
+"PostgreSQL" → ask hosting/version once → then mark complete.
+Never go more than one level deep on any single node.`,
+
+  high: `
+DEPTH: high — drill until every node value is a direct code-generation instruction.
+A value is complete only when a developer can write the code without deciding anything.
+"web" is NOT complete → ask framework → ask version → ask deployment → ask env config.
+"PostgreSQL" is NOT complete → ask version → ask hosting → ask ORM → ask migration strategy.
+Keep asking sub-questions on the same node until the answer is unambiguous and implementable.
+Only then mark complete and move to the next node.`,
 };
 
 function buildSystemPrompt(verbosity) {
   return `/no_think
-You are SPECODE, a spec elicitation engine. Fill the spec tree by asking precise questions. When complete, an LLM must be able to implement the app from the tree alone — no further questions.
+You are SPECODE — a spec elicitation engine. Your only job: fill the spec tree with values specific enough that an LLM can generate a complete, deployable application from tree.json alone, with zero clarifying questions.
 
-## Role
-- Ask EXACTLY ONE question per turn targeting the highest-priority unknown node.
-- Extract structured spec values from every user answer, even casual ones.
-- When an answer implies sub-specs, propose them as newChildren.
-- Flag shared patterns (auth, notifications, CRUD, search, pagination) in sharedPatternDetected.
+## The standard for "complete"
+A node is complete when its value is a direct code-generation instruction — no inference, no assumption, no ambiguity.
+INCOMPLETE: "web", "database", "auth", "notifications"
+COMPLETE: "Next.js 14 App Router, deployed on Vercel", "PostgreSQL 16 on Railway, Prisma ORM", "JWT in httpOnly cookies, 7-day expiry, refresh token rotation", "email via Resend, on user signup and password reset"
 
 ## Output: valid JSON only — no prose, no markdown
 {
-  "question": "single question for the user",
+  "question": "single focused question for the user",
   "targetNodeId": "8-char node ID prefix or null",
-  "nodeUpdate": { "nodeId": "id", "value": "specific implementable value or null", "status": "partial|complete", "openQuestions": [] } | null,
+  "nodeUpdate": { "nodeId": "id", "value": "complete implementable value or null if still partial", "status": "partial|complete|n/a", "openQuestions": [] } | null,
   "newChildren": [{ "parentId": "id", "label": "name", "kind": "feature|data-model|flow|integration|constraint|user-role|shared", "value": null }],
   "sharedPatternDetected": "pattern name or null",
-  "reasoning": "one sentence: why this question next"
+  "reasoning": "one sentence: why this question, why complete or not"
 }
 
-## Verbosity
-${VERBOSITY_INSTRUCTIONS[verbosity] || VERBOSITY_INSTRUCTIONS.medium}
+## Specification depth
+${VERBOSITY_DEPTH[verbosity] || VERBOSITY_DEPTH.medium}
 
-## Completeness
-"complete" = specific enough to implement without asking more questions.
-- Intent node: mark complete if a clear purpose/goal is stated. "a task management app" = complete.
-- Platform: mark complete once a specific target is named. "web" = complete.
-- Tech Stack: mark complete once language and main framework are named.
-- Features: mark complete only when all sub-features are fully specified.
+## 3-strike assumption rule
+If the same node has been asked 3 times and the user has not provided a usable answer (skipped, said "don't know", gave vague replies):
+- Mark the node complete with a reasonable default
+- Set the value as: "assumed: <value> — reason: <why this default makes sense>"
+- This assumption is visible in the tree and accountable
 
 ## Rules
-- Never ask about nodes whose dependencies are still empty.
-- Never repeat answered questions.
-- nodeUpdate is null only on the very first turn (no user answer to process yet).
-- CRITICAL: If the intent node already has a value like "a task management app", mark it COMPLETE immediately. Do not ask for more clarification about intent unless it is genuinely ambiguous (e.g. "build something cool").`;
+- NEVER ask about nodes whose dependencies are still empty.
+- NEVER mark a node complete unless its value meets the completeness standard above.
+- nodeUpdate is null only on the very first turn (no prior user answer to process).
+- If the intent node already has a clear purpose ("a task management app"), mark it COMPLETE immediately — do not re-ask.
+- When an answer implies sub-specs (e.g. "OAuth" → provider config, callback URL), add them as newChildren.
+- Flag shared patterns (auth, notifications, file upload, search, pagination) in sharedPatternDetected.`;
 }
 
 function buildTreeContext(tree, gaps) {
@@ -399,10 +424,11 @@ function buildTreeContext(tree, gaps) {
   const icons = { complete: "✓", partial: "~", empty: "○", "n/a": "-" };
 
   const nodeLines = all.map(n => {
-    const icon = icons[n.status] || "?";
-    const val  = n.value ? `→ ${n.value}` : "(empty)";
-    const q    = n.openQuestions.length ? ` [?? ${n.openQuestions[0]}]` : "";
-    return `  ${icon} [${n.id.slice(0,8)}] ${n.kind.toUpperCase()}: ${n.label} ${val}${q}`;
+    const icon     = icons[n.status] || "?";
+    const val      = n.value ? `→ ${n.value}` : "(empty)";
+    const attempts = (n.attempts && n.attempts > 0) ? ` [asked:${n.attempts}/3]` : "";
+    const q        = n.openQuestions.length ? ` [?? ${n.openQuestions[0]}]` : "";
+    return `  ${icon} [${n.id.slice(0,8)}] ${n.kind.toUpperCase()}: ${n.label} ${val}${attempts}${q}`;
   }).join("\n");
 
   const sharedLines = tree.shared.length
@@ -410,7 +436,10 @@ function buildTreeContext(tree, gaps) {
     : "";
 
   const gapList = gaps.incompleteNodes.slice(0, 5)
-    .map(n => `  - [${n.id.slice(0,8)}] ${n.kind}: ${n.label} (${n.status})`).join("\n");
+    .map(n => {
+      const strikes = n.attempts ? ` (asked ${n.attempts}/3 times)` : "";
+      return `  - [${n.id.slice(0,8)}] ${n.kind}: ${n.label} (${n.status})${strikes}`;
+    }).join("\n");
 
   return `## Spec Tree (completeness: ${tree.completeness}%)
 TITLE: ${tree.title}  VERBOSITY: ${tree.verbosity}
@@ -422,6 +451,17 @@ TOP GAPS:
 ${gapList || "  (none)"}`;
 }
 
+// Count how many times a specific node has been asked in conversation history
+function countNodeAttempts(nodeIdPrefix, history) {
+  let count = 0;
+  for (const entry of history) {
+    if (entry.role === "ai" && entry.nodeId && String(entry.nodeId).startsWith(nodeIdPrefix)) {
+      count++;
+    }
+  }
+  return count;
+}
+
 function buildMessages(tree, gaps, history) {
   const messages = [
     { role: "system", content: buildSystemPrompt(tree.verbosity) },
@@ -430,24 +470,35 @@ function buildMessages(tree, gaps, history) {
   ];
 
   const target = gaps.priorityNode;
+
   // Detect if the last user message was answering the current target node
-  // (means the model should process that answer, not ask the same question again)
-  const lastUserMsg = history.length >= 2 ? history[history.length - 1] : null;
-  const lastAiMsg   = history.length >= 2 ? history[history.length - 2] : null;
+  const lastUserMsg  = history.length >= 2 ? history[history.length - 1] : null;
+  const lastAiMsg    = history.length >= 2 ? history[history.length - 2] : null;
   const lastAnswered = lastUserMsg && lastUserMsg.role === "user" && lastAiMsg && lastAiMsg.role === "ai"
     && target && lastAiMsg.nodeId && String(lastAiMsg.nodeId).startsWith(target.id.slice(0, 8));
+
+  // How many times has this node been asked — triggers assumption rule at 3
+  const attempts = target ? countNodeAttempts(target.id.slice(0, 8), history) : 0;
+  const mustAssume = attempts >= 3;
 
   const instruction = gaps.isComplete
     ? `Spec complete (${tree.completeness}%). Respond with JSON: question = congratulations message, nodeUpdate = null.`
     : target
-      ? lastAnswered
-        ? `The user just answered the question about [${target.id.slice(0,8)}] "${target.label}".
+      ? mustAssume
+        ? `Node [${target.id.slice(0,8)}] "${target.label}" has been asked ${attempts} times with no usable answer.
+APPLY THE 3-STRIKE RULE:
+1. Choose the most reasonable default for "${target.label}" given the context of this application.
+2. Set nodeUpdate: status="complete", value="assumed: <your default> — reason: <why this default fits>".
+3. Ask about the NEXT node — do NOT ask about [${target.id.slice(0,8)}] again.`
+        : lastAnswered
+          ? `The user just answered the question about [${target.id.slice(0,8)}] "${target.label}".
 Their answer: "${lastUserMsg.content}"
-1. Set nodeUpdate: mark [${target.id.slice(0,8)}] as "complete" with the user's answer as value.
-2. Then ask about the NEXT highest-priority node — do NOT ask about [${target.id.slice(0,8)}] again.`
-        : `YOU MUST ask about node [${target.id.slice(0,8)}] "${target.label}" (kind: ${target.kind}, current status: ${target.status}).
-Set targetNodeId to "${target.id.slice(0,8)}".
-Do NOT ask about any other node.`
+Evaluate the answer against the completeness standard for verbosity=${tree.verbosity}:
+- If the answer is specific enough per the depth rules → set status="complete", value=<their exact answer>.
+- If more detail is needed per the depth rules → set status="partial", value=<their answer so far>, then ask the ONE most important follow-up question about [${target.id.slice(0,8)}].
+- Do NOT ask about a different node until this one is complete.`
+          : `Ask about node [${target.id.slice(0,8)}] "${target.label}" (kind: ${target.kind}, status: ${target.status}, asked: ${attempts}/3 times).
+Set targetNodeId to "${target.id.slice(0,8)}". Do NOT ask about any other node.`
       : `Determine the most important unknown and ask about it.`;
 
   messages.push({ role: "user", content: instruction });
@@ -740,6 +791,12 @@ async function run() {
     }
 
     // Show the extracted question cleanly below the raw stream
+    // If an assumption was applied (3-strike rule), surface it prominently
+    const isAssumption = parsed.nodeUpdate && parsed.nodeUpdate.value &&
+      String(parsed.nodeUpdate.value).startsWith("assumed:");
+    if (isAssumption) {
+      console.log(`\n${C.yellow}${C.bold}⚠ Assumption applied:${C.reset} ${parsed.nodeUpdate.value}`);
+    }
     console.log(`\n${C.cyan}→${C.reset} ${parsed.question}`);
     if (parsed.reasoning) console.log(`  ${C.gray}${parsed.reasoning}${C.reset}`);
 
@@ -777,13 +834,15 @@ async function run() {
       continue;
     }
 
-    // Apply user's raw answer to the target node immediately
+    // Apply user's raw answer to the target node immediately and increment attempt counter
     if (parsed.targetNodeId) {
-      // Find the full node ID from 8-char prefix
       const all    = flattenNodes(tree.nodes);
       const target = all.find(n => n.id.startsWith(parsed.targetNodeId) || n.id === parsed.targetNodeId);
       if (target) {
-        tree = { ...tree, nodes: patchNodes(tree.nodes, target.id, { value: trimmed, status: "partial", openQuestions: [] }) };
+        const attempts = (target.attempts || 0) + 1;
+        tree = { ...tree, nodes: patchNodes(tree.nodes, target.id, {
+          value: trimmed, status: "partial", openQuestions: [], attempts,
+        }) };
       }
     }
 

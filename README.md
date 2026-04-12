@@ -73,7 +73,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed breakdown of the engine lo
 
 ## Quickstart
 
-**Requirements:** Node 18+, Ollama running locally
+**Requirements:** Node 10+, Ollama running locally
 
 ```bash
 # 1. Clone
@@ -143,13 +143,15 @@ The tree is the artifact. It's a self-contained JSON document that can be used a
 
 ## Verbosity
 
-Three levels control how the AI communicates — not what it asks.
+Three levels control **specification depth** — how many sub-questions are asked before a node is marked complete.
 
-| Level | Style | Example |
-|-------|-------|---------|
-| `low` | Keywords + choices | `auth strategy? [JWT / session / OAuth]` |
-| `medium` | Brief context | `JWT = stateless, API-friendly. Session = simple for web. OAuth = delegate to Google/GitHub.` |
-| `high` | Full detail | Explains question, options, tradeoffs, and downstream spec implications in 3–5 sentences. |
+| Level | Depth | Behaviour |
+|-------|-------|-----------|
+| `low` | Flat | One answer per node, move on immediately. "web" = Platform complete. Fast, broad strokes. |
+| `medium` | One follow-up | One clarifying question if the answer is too broad. "web" → "which framework?" → done. |
+| `high` | Full drill | Keeps asking until every node is a direct code-generation instruction. "web" → framework → version → routing → deployment → env config. No assumptions. |
+
+At every level: if the same node is asked **3 times** with no usable answer, the AI declares an explicit assumption with reasoning and moves on. Nothing is silently inferred.
 
 Change mid-session: type `/verbosity low`
 
