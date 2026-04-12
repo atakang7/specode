@@ -430,12 +430,23 @@ function buildMessages(tree, gaps, history) {
   ];
 
   const target = gaps.priorityNode;
+  // Detect if the last user message was answering the current target node
+  // (means the model should process that answer, not ask the same question again)
+  const lastUserMsg = history.length >= 2 ? history[history.length - 1] : null;
+  const lastAiMsg   = history.length >= 2 ? history[history.length - 2] : null;
+  const lastAnswered = lastUserMsg && lastUserMsg.role === "user" && lastAiMsg && lastAiMsg.role === "ai"
+    && target && lastAiMsg.nodeId && String(lastAiMsg.nodeId).startsWith(target.id.slice(0, 8));
+
   const instruction = gaps.isComplete
     ? `Spec complete (${tree.completeness}%). Respond with JSON: question = congratulations message, nodeUpdate = null.`
     : target
-      ? `YOU MUST ask about node [${target.id.slice(0,8)}] "${target.label}" (kind: ${target.kind}, current status: ${target.status}).
+      ? lastAnswered
+        ? `The user just answered the question about [${target.id.slice(0,8)}] "${target.label}".
+Their answer: "${lastUserMsg.content}"
+1. Set nodeUpdate: mark [${target.id.slice(0,8)}] as "complete" with the user's answer as value.
+2. Then ask about the NEXT highest-priority node — do NOT ask about [${target.id.slice(0,8)}] again.`
+        : `YOU MUST ask about node [${target.id.slice(0,8)}] "${target.label}" (kind: ${target.kind}, current status: ${target.status}).
 Set targetNodeId to "${target.id.slice(0,8)}".
-If the user's last message answered something else, extract that in nodeUpdate first, then ask about [${target.id.slice(0,8)}].
 Do NOT ask about any other node.`
       : `Determine the most important unknown and ask about it.`;
 
@@ -781,7 +792,7 @@ async function run() {
     tree = mutated;
 
     // Update history (used as LLM context on next turn)
-    history.push({ role: "ai",   content: parsed.question });
+    history.push({ role: "ai",   content: parsed.question, nodeId: parsed.targetNodeId });
     history.push({ role: "user", content: trimmed });
 
     // ── Persist everything atomically ────────────────────────────────────────
