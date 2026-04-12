@@ -1,0 +1,16 @@
+{
+  "name": "specode",
+  "version": "0.1.0",
+  "description": "A spec elicitation engine — turns intent into a complete, structured application specification through AI-driven gap detection.",
+  "private": true,
+  "workspaces": [
+    "core",
+    "cli",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev:cli": "npm run dev --workspace=cli",
+    "dev:web": "npm run dev --workspace=web"
+  }
+}

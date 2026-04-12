@@ -1,0 +1,314 @@
+/**
+ * SPECODE Web UI — Terminal-aesthetic stylesheet
+ *
+ * Design philosophy:
+ *   - Monospace everything
+ *   - Dark background, high contrast text
+ *   - No gradients, no shadows, no rounded corners (except subtle input)
+ *   - Borders are single-line box-drawing style
+ *   - Colors: only functional (green=complete, yellow=partial, gray=empty)
+ *   - Inspired by Claude Code, htop, tmux
+ */
+
+:root {
+  --bg:         #0d0d0d;
+  --bg-panel:   #111111;
+  --bg-input:   #161616;
+  --border:     #2a2a2a;
+  --text:       #d0d0d0;
+  --text-dim:   #555555;
+  --text-label: #888888;
+  --accent:     #4af0c4;   /* cyan — primary accent */
+  --ok:         #4af06a;   /* green — complete nodes */
+  --warn:       #f0c44a;   /* yellow — partial nodes */
+  --error:      #f04a4a;   /* red — errors */
+  --ai-color:   #4af0c4;
+  --user-color: #d0d0d0;
+  --font:       "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+#app {
+  display: grid;
+  height: 100vh;
+  grid-template-rows: auto 1fr auto auto;
+  grid-template-columns: 320px 1fr;
+  grid-template-areas:
+    "header  header"
+    "tree    chat"
+    "status  status"
+    "input   input";
+}
+
+/* ── Header ────────────────────────────────────────────────────────────── */
+
+#header {
+  grid-area: header;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+#header .logo {
+  color: var(--accent);
+  font-weight: bold;
+  letter-spacing: 0.15em;
+  font-size: 14px;
+}
+
+#header .subtitle {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* ── Tree Panel ─────────────────────────────────────────────────────────── */
+
+#tree-panel {
+  grid-area: tree;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+#tree-panel .panel-title {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+}
+
+.tree-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-node .status-icon {
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.tree-node.status-complete .status-icon { color: var(--ok); }
+.tree-node.status-partial  .status-icon { color: var(--warn); }
+.tree-node.status-empty    .status-icon { color: var(--text-dim); }
+
+.tree-node .node-label {
+  color: var(--text-label);
+  font-size: 12px;
+}
+
+.tree-node .node-value {
+  color: var(--text);
+  font-size: 12px;
+  margin-left: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-node.depth-1 { padding-left: 16px; }
+.tree-node.depth-2 { padding-left: 32px; }
+.tree-node.depth-3 { padding-left: 48px; }
+
+.shared-ref {
+  color: var(--accent);
+  font-size: 11px;
+  margin-left: 4px;
+  opacity: 0.7;
+}
+
+.shared-section {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.shared-section .section-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.shared-node {
+  color: var(--accent);
+  font-size: 12px;
+  padding: 1px 0;
+}
+
+/* ── Chat Panel ─────────────────────────────────────────────────────────── */
+
+#chat-panel {
+  grid-area: chat;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 8px 16px;
+}
+
+#chat-panel .panel-title {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+}
+
+#chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-turn .role-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.chat-turn.role-ai   .role-label { color: var(--ai-color); }
+.chat-turn.role-user .role-label { color: var(--text-dim); }
+
+.chat-turn .turn-content {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-turn.role-ai   .turn-content { color: var(--text); }
+.chat-turn.role-user .turn-content { color: var(--text-label); }
+
+.thinking-indicator {
+  color: var(--warn);
+  font-size: 12px;
+  animation: blink 1s step-start infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* ── Status Bar ─────────────────────────────────────────────────────────── */
+
+#status-bar {
+  grid-area: status;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 4px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+#status-bar .stat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#status-bar .stat-label { color: var(--text-dim); }
+#status-bar .stat-value { color: var(--text); }
+#status-bar .stat-value.ok   { color: var(--ok); }
+#status-bar .stat-value.warn { color: var(--warn); }
+#status-bar .stat-value.low  { color: var(--error); }
+
+#status-bar .commands {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+#status-bar .dim-label { color: var(--text-dim); }
+#status-bar .dim-value { color: var(--text-label); }
+#header .sep           { color: var(--border); margin: 0 8px; }
+
+#status-bar .sep { color: var(--border); }
+
+.verbosity-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.verbosity-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.verbosity-btn:hover { border-color: var(--text-dim); }
+
+/* ── Input Bar ──────────────────────────────────────────────────────────── */
+
+#input-bar {
+  grid-area: input;
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-input);
+}
+
+#input-bar .prompt-symbol {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+#input-bar input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  caret-color: var(--accent);
+}
+
+#input-bar input::placeholder {
+  color: var(--text-dim);
+}
+
+#input-bar input:disabled {
+  color: var(--text-dim);
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); }

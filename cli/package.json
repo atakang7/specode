@@ -1,0 +1,23 @@
+{
+  "name": "@specode/cli",
+  "version": "0.1.0",
+  "description": "SPECODE CLI — keyboard-driven TUI for spec elicitation.",
+  "bin": {
+    "specode": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.tsx"
+  },
+  "dependencies": {
+    "@specode/core": "*",
+    "ink": "^4.4.1",
+    "ink-text-input": "^5.0.1",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

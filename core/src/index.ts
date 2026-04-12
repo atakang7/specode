@@ -1,0 +1,212 @@
+/**
+ * SPECODE — Engine
+ *
+ * Orchestrates the full spec elicitation loop:
+ *   1. Initialize a tree from user intent
+ *   2. Analyze gaps → find the highest-priority unknown
+ *   3. Build a context-rich prompt and call the LLM
+ *   4. Parse the structured response and apply mutations to the tree
+ *   5. Detect and hoist shared patterns
+ *   6. Emit events so UIs (CLI, web) can re-render reactively
+ *   7. Repeat until the tree is complete
+ *
+ * The engine is completely UI-agnostic. All communication is through events.
+ * External callers never mutate the tree directly — they call engine methods.
+ */
+
+import { EventEmitter } from "events";
+import {
+  SpecTree,
+  EngineSession,
+  ConversationTurn,
+  VerbosityLevel,
+  LLMProvider,
+} from "./types/index.js";
+import {
+  initTree,
+  updateNode,
+  addChildNode,
+  hoistSharedSubtrees,
+  analyzeGaps,
+  makeNode,
+} from "./tree/index.js";
+import {
+  buildMessages,
+  parseLLMResponse,
+  ParsedLLMResponse,
+} from "./prompts/index.js";
+
+// ---------------------------------------------------------------------------
+// Engine events
+// ---------------------------------------------------------------------------
+
+export type EngineEvent =
+  | { type: "tree:updated";    tree: SpecTree }
+  | { type: "question:ready";  question: string; targetNodeId: string | null }
+  | { type: "thinking:start" }
+  | { type: "thinking:end" }
+  | { type: "spec:complete";   tree: SpecTree }
+  | { type: "error";           message: string };
+
+// ---------------------------------------------------------------------------
+// Engine
+// ---------------------------------------------------------------------------
+
+export class Engine extends EventEmitter {
+  private session: EngineSession;
+
+  constructor(provider: LLMProvider, verbosity: VerbosityLevel = "medium") {
+    super();
+    this.session = {
+      tree:         initTree("", verbosity),
+      conversation: [],
+      provider,
+      verbosity,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Start a new spec session with the user's raw intent.
+  // -------------------------------------------------------------------------
+
+  async start(rawIntent: string): Promise<void> {
+    const tree = initTree(rawIntent, this.session.verbosity);
+    this.session = { ...this.session, tree, conversation: [] };
+    this.emit("tree:updated", this.getTree());
+    await this.nextTurn();
+  }
+
+  // -------------------------------------------------------------------------
+  // Submit a user answer and advance the conversation.
+  // -------------------------------------------------------------------------
+
+  async answer(userInput: string): Promise<void> {
+    this.session.conversation.push({
+      role:      "user",
+      content:   userInput,
+      timestamp: new Date().toISOString(),
+    });
+    await this.nextTurn();
+  }
+
+  // -------------------------------------------------------------------------
+  // Change verbosity mid-session.
+  // -------------------------------------------------------------------------
+
+  setVerbosity(level: VerbosityLevel): void {
+    this.session.verbosity       = level;
+    this.session.tree            = { ...this.session.tree, verbosity: level };
+    this.emit("tree:updated", this.getTree());
+  }
+
+  // -------------------------------------------------------------------------
+  // Read-only access to session state.
+  // Returns copies — callers cannot mutate internal state.
+  // -------------------------------------------------------------------------
+
+  getTree(): SpecTree {
+    return structuredClone(this.session.tree);
+  }
+
+  getConversation(): ConversationTurn[] {
+    return [...this.session.conversation];
+  }
+
+  // -------------------------------------------------------------------------
+  // Core loop: gap analysis → build prompt → call LLM → apply mutations
+  // -------------------------------------------------------------------------
+
+  private async nextTurn(): Promise<void> {
+    try {
+      this.emit("thinking:start");
+
+      const gapAnalysis = analyzeGaps(this.session.tree);
+
+      if (gapAnalysis.isComplete) {
+        this.emit("thinking:end");
+        this.emit("spec:complete", this.getTree());
+        return;
+      }
+
+      const messages   = buildMessages(this.session.tree, gapAnalysis, this.session.conversation);
+      const llmResponse = await this.session.provider.complete(messages);
+      const parsed      = parseLLMResponse(llmResponse.content);
+
+      this.applyMutations(parsed);
+
+      this.session.conversation.push({
+        role:      "ai",
+        content:   parsed.question,
+        nodeId:    parsed.targetNodeId ?? undefined,
+        timestamp: new Date().toISOString(),
+      });
+
+      this.emit("thinking:end");
+      this.emit("tree:updated",   this.getTree());
+      this.emit("question:ready", parsed.question, parsed.targetNodeId);
+    } catch (err) {
+      this.emit("thinking:end");
+      this.emit("error", err instanceof Error ? err.message : "Unknown engine error");
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Apply all mutations from a parsed LLM response to the tree.
+  // -------------------------------------------------------------------------
+
+  private applyMutations(parsed: ParsedLLMResponse): void {
+    // Update an existing node with newly extracted spec value
+    if (parsed.nodeUpdate) {
+      const { nodeId, value, status, openQuestions } = parsed.nodeUpdate;
+      if (nodeId) {
+        this.session.tree = updateNode(this.session.tree, nodeId, {
+          value,
+          status,
+          openQuestions,
+        });
+      }
+    }
+
+    // Add new child nodes the LLM determined are implied by the user's answers
+    for (const child of parsed.newChildren) {
+      if (!child.parentId || !child.label) continue;
+      this.session.tree = addChildNode(this.session.tree, child.parentId, {
+        label:         child.label,
+        kind:          child.kind,
+        status:        child.value ? "partial" : "empty",
+        value:         child.value,
+        children:      [],
+        dependsOn:     [],
+        openQuestions: [],
+      });
+    }
+
+    // Hoist shared patterns into tree.shared
+    if (parsed.sharedPatternDetected) {
+      const already = this.session.tree.shared.find(
+        (s) => s.label.toLowerCase() === parsed.sharedPatternDetected!.toLowerCase()
+      );
+      if (!already) {
+        const sharedNode = makeNode(parsed.sharedPatternDetected, "shared");
+        this.session.tree = {
+          ...this.session.tree,
+          shared: [...this.session.tree.shared, sharedNode],
+        };
+      }
+    }
+
+    // Run structural hoisting pass after mutations
+    this.session.tree = hoistSharedSubtrees(this.session.tree);
+  }
+}
+
+// Re-export everything consumers need
+export * from "./types/index.js";
+export * from "./tree/index.js";
+export * from "./prompts/index.js";
+export {
+  ClaudeProvider,
+  OpenAIProvider,
+  OllamaProvider,
+  createProviderFromEnv,
+} from "./llm/index.js";
