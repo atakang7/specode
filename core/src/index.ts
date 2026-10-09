@@ -29,6 +29,7 @@ import {
   hoistSharedSubtrees,
   analyzeGaps,
   makeNode,
+  resolveNodeId,
 } from "./tree/index.js";
 import {
   buildMessages,
@@ -166,48 +167,35 @@ export class Engine extends Emitter {
   // -------------------------------------------------------------------------
 
   private applyMutations(parsed: ParsedLLMResponse): void {
-    // Update an existing node with newly extracted spec value
-    if (parsed.nodeUpdate) {
+    // Construct the full mutation candidate first. A bad node prefix or
+    // invalid child cannot leave a half-committed tree in memory.
+    let next = this.session.tree;
+    if (parsed.nodeUpdate?.nodeId) {
       const { nodeId, value, status, openQuestions } = parsed.nodeUpdate;
-      if (nodeId) {
-        this.session.tree = updateNode(this.session.tree, nodeId, {
-          value,
-          status,
-          openQuestions,
-        });
-      }
+      next = updateNode(next, resolveNodeId(next, nodeId), {
+        value, status, openQuestions,
+      });
     }
 
-    // Add new child nodes the LLM determined are implied by the user's answers
     for (const child of parsed.newChildren) {
       if (!child.parentId || !child.label) continue;
-      this.session.tree = addChildNode(this.session.tree, child.parentId, {
-        label:         child.label,
-        kind:          child.kind,
-        status:        child.value ? "partial" : "empty",
-        value:         child.value,
-        children:      [],
-        dependsOn:     [],
+      next = addChildNode(next, resolveNodeId(next, child.parentId), {
+        label: child.label,
+        kind: child.kind,
+        status: child.value ? "partial" : "empty",
+        value: child.value,
+        children: [],
+        dependsOn: [],
         openQuestions: [],
       });
     }
 
-    // Hoist shared patterns into tree.shared
     if (parsed.sharedPatternDetected) {
-      const already = this.session.tree.shared.find(
-        (s) => s.label.toLowerCase() === parsed.sharedPatternDetected!.toLowerCase()
-      );
-      if (!already) {
-        const sharedNode = makeNode(parsed.sharedPatternDetected, "shared");
-        this.session.tree = {
-          ...this.session.tree,
-          shared: [...this.session.tree.shared, sharedNode],
-        };
-      }
+      const label = parsed.sharedPatternDetected;
+      const exists = next.shared.some((n) => n.label.toLowerCase() === label.toLowerCase());
+      if (!exists) next = { ...next, shared: [...next.shared, makeNode(label, "shared")] };
     }
-
-    // Run structural hoisting pass after mutations
-    this.session.tree = hoistSharedSubtrees(this.session.tree);
+    this.session.tree = hoistSharedSubtrees(next);
   }
 }
 
