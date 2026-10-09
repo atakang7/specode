@@ -1,0 +1,33 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install workspaces
+        run: npm install --ignore-scripts
+      - name: Compile core, CLI and web
+        run: npm run build
+      - name: Smoke standalone runner
+        run: node runner/run.mjs --help
+      - name: Print installation lockfile for reproducible review
+        if: always()
+        run: |
+          if [ -f package-lock.json ]; then
+            echo 'LOCK_BEGIN'
+            base64 -w0 package-lock.json
+            echo
+            echo 'LOCK_END'
+          fi

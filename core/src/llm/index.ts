@@ -147,7 +147,7 @@ export class OllamaProvider implements LLMProvider {
 // ---------------------------------------------------------------------------
 
 export function createProviderFromEnv(): LLMProvider {
-  const provider = process.env.SPECODE_PROVIDER ?? "claude";
+  const provider = process.env.SPECODE_PROVIDER ?? "ollama";
 
   switch (provider) {
     case "claude": {
