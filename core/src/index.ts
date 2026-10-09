@@ -89,6 +89,17 @@ export class Engine extends Emitter {
     await this.nextTurn();
   }
 
+  /** Restore a previously persisted session without running an extra LLM turn. */
+  restore(tree: SpecTree, conversation: ConversationTurn[]): void {
+    if (!tree || !Array.isArray(tree.nodes) || !Array.isArray(conversation)) {
+      throw new Error("Invalid saved spec session");
+    }
+    this.session.tree = structuredClone(tree);
+    this.session.conversation = structuredClone(conversation);
+    this.session.verbosity = tree.verbosity;
+    this.emit("tree:updated", this.getTree());
+  }
+
   // -------------------------------------------------------------------------
   // Change verbosity mid-session.
   // -------------------------------------------------------------------------
