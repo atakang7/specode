@@ -28,7 +28,7 @@ import {
   SpecNode,
   ConversationTurn,
   VerbosityLevel,
-  createProviderFromEnv,
+  OllamaProvider,
 } from "@specode/core";
 
 // ---------------------------------------------------------------------------
@@ -74,7 +74,8 @@ el.verbosityBtns.forEach((btn) => {
 let engine: Engine;
 
 try {
-  const provider = createProviderFromEnv();
+  // Browser never reads provider API keys: talk to the local Ollama proxy.
+  const provider = new OllamaProvider("qwen3.5:0.8b", "/ollama");
   engine = new Engine(provider, "medium");
 } catch (err) {
   showFatal(err instanceof Error ? err.message : String(err));
@@ -129,7 +130,8 @@ const intentParam = new URLSearchParams(window.location.search).get("intent")?.t
 const savedState  = loadFromStorage();
 
 if (savedState) {
-  // Resume from localStorage
+  // Restore both the tree and conversation to the engine, not just the DOM.
+  engine.restore(savedState.tree, savedState.conversation);
   renderTree(savedState.tree);
   updateCoverage(savedState.tree);
   for (const turn of savedState.conversation) {
