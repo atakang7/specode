@@ -197,80 +197,67 @@ function insertChild(nodes: SpecNode[], parentId: string, child: SpecNode): Spec
 // ---------------------------------------------------------------------------
 
 export function hoistSharedSubtrees(tree: SpecTree): SpecTree {
-  // Only scan feature nodes — shared patterns live in features, not in
-  // platform/intent/constraints which are structurally unique.
-  const featureNodes = tree.nodes.filter((n) => n.kind === "feature");
-  const labelToIds   = new Map<string, string[]>();
-
-  collectFeatureChildLabels(featureNodes, labelToIds);
-
-  let updatedTree = { ...tree };
-
-  for (const [label, ids] of labelToIds.entries()) {
-    const isKnownPattern = SHARED_PATTERNS.some((p) =>
-      label.toLowerCase().includes(p)
-    );
-
-    if (ids.length > 1 || isKnownPattern) {
-      const already = updatedTree.shared.find(
-        (s) => s.label.toLowerCase() === label.toLowerCase()
-      );
-
-      if (!already) {
-        // Create the shared node
-        const sharedNode = makeNode(label, "shared");
-        updatedTree = { ...updatedTree, shared: [...updatedTree.shared, sharedNode] };
-        // Replace all duplicates in the feature tree with sharedRef pointers
-        updatedTree = {
-          ...updatedTree,
-          nodes: replaceWithSharedRef(updatedTree.nodes, label, sharedNode.id),
-        };
-      }
-    }
-  }
-
-  updatedTree.updatedAt    = new Date().toISOString();
-  updatedTree.completeness = scoreTree(updatedTree);
-  return updatedTree;
-}
-
-function collectFeatureChildLabels(
-  nodes: SpecNode[],
-  map: Map<string, string[]>
-): void {
-  for (const node of nodes) {
+  // Only share concepts that actually appear in multiple feature branches.
+  // A single known pattern must remain where it was defined.
+  const featureNodes = tree.nodes.filter((node) => node.kind === "feature");
+  const labels = new Map<string, SpecNode[]>();
+  const visit = (node: SpecNode) => {
     for (const child of node.children) {
-      const existing = map.get(child.label) ?? [];
-      map.set(child.label, [...existing, child.id]);
-      // Recurse into grandchildren
-      if (child.children.length > 0) collectFeatureChildLabels([child], map);
+      if (!child.sharedRef) {
+        const key = child.label.toLowerCase().trim();
+        labels.set(key, [...(labels.get(key) ?? []), child]);
+      }
+      visit(child);
     }
+  };
+  for (const feature of featureNodes) visit(feature);
+
+  let updated: SpecTree = { ...tree };
+  for (const [label, occurrences] of labels) {
+    if (occurrences.length < 2) continue;
+    const existing = updated.shared.find((node) => node.label.toLowerCase().trim() === label);
+    const source = occurrences.find((node) => node.value || node.children.length > 0) ?? occurrences[0];
+    const canonical: SpecNode = existing ?? {
+      ...source, id: uuid(), kind: "shared", updatedAt: new Date().toISOString(),
+    };
+    if (!existing) updated = { ...updated, shared: [...updated.shared, canonical] };
+    updated = {
+      ...updated,
+      nodes: replaceWithSharedRef(updated.nodes, label, canonical.id),
+    };
   }
+
+  updated.updatedAt = new Date().toISOString();
+  updated.completeness = scoreTree(updated);
+  return updated;
 }
 
-function replaceWithSharedRef(
-  nodes: SpecNode[],
-  label: string,
-  sharedId: string
-): SpecNode[] {
-  return nodes.map((node) => {
-    if (node.children.length === 0) return node;
-    const updatedChildren = node.children.map((child) => {
-      if (child.label.toLowerCase() === label.toLowerCase() && !child.sharedRef) {
-        // Replace with a lightweight reference node
+function replaceWithSharedRef(nodes: SpecNode[], label: string, sharedId: string): SpecNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    children: node.children.map((child) => {
+      if (child.label.toLowerCase().trim() === label && !child.sharedRef) {
         return {
-          ...child,
-          sharedRef: sharedId,
-          status: "complete" as const,
-          value: `→ shared/${label}`,
-          children: [],
+          ...child, sharedRef: sharedId,
+          status: "complete" as const, value: `→ shared/${child.label}`,
+          children: [], openQuestions: [],
           updatedAt: new Date().toISOString(),
         };
       }
-      return child;
-    });
-    return { ...node, children: replaceWithSharedRef(updatedChildren, label, sharedId) };
-  });
+      return replaceWithSharedRef([child], label, sharedId)[0];
+    }),
+  }));
+}
+
+/** Resolve the 8-character node IDs sent by models; reject ambiguity. */
+export function resolveNodeId(tree: SpecTree, prefix: string): string {
+  if (!prefix || prefix.length < 8) throw new Error("Invalid node ID prefix");
+  const candidates = flattenNodes([...tree.nodes, ...tree.shared])
+    .filter((node) => node.id === prefix || node.id.startsWith(prefix));
+  if (candidates.length !== 1) {
+    throw new Error(`Unresolvable or ambiguous node ID: ${prefix}`);
+  }
+  return candidates[0].id;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,14 +271,15 @@ function replaceWithSharedRef(
 // ---------------------------------------------------------------------------
 
 export function analyzeGaps(tree: SpecTree): GapAnalysis {
-  const allNodes = flattenNodes(tree.nodes);
+  const allNodes = flattenNodes([...tree.nodes, ...tree.shared]);
 
   // Validate dependency graph is acyclic before using it
   validateNoCycles(allNodes);
 
-  const incompleteNodes = allNodes
-    .filter((n) => n.status === "empty" || n.status === "partial")
-    .filter((n) => !n.sharedRef)                     // skip reference nodes
+  const unresolved = allNodes.filter((node) =>
+    !node.sharedRef && (node.status === "empty" || node.status === "partial")
+  );
+  const incompleteNodes = unresolved                     // skip reference nodes
     .filter((n) => dependenciesMet(n, allNodes))
     .sort((a, b) => KIND_PRIORITY[b.kind] - KIND_PRIORITY[a.kind]);
 
@@ -308,7 +296,7 @@ export function analyzeGaps(tree: SpecTree): GapAnalysis {
     incompleteNodes,
     ambiguousNodes,
     coverageScore,
-    isComplete: coverageScore >= 85 && incompleteNodes.length === 0 && ambiguousNodes.length === 0,
+    isComplete: coverageScore >= 85 && unresolved.length === 0 && ambiguousNodes.length === 0,
   };
 }
 
@@ -355,7 +343,7 @@ function validateNoCycles(nodes: SpecNode[]): void {
 // ---------------------------------------------------------------------------
 
 export function scoreTree(tree: SpecTree): number {
-  const allNodes = flattenNodes(tree.nodes);
+  const allNodes = flattenNodes([...tree.nodes, ...tree.shared]).filter((node) => !node.sharedRef);
   if (allNodes.length === 0) return 0;
 
   let totalWeight  = 0;
