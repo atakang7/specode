@@ -14,7 +14,7 @@
  * External callers never mutate the tree directly — they call engine methods.
  */
 
-import { EventEmitter } from "events";
+import { Emitter } from "./emitter.js";
 import {
   SpecTree,
   EngineSession,
@@ -52,7 +52,7 @@ export type EngineEvent =
 // Engine
 // ---------------------------------------------------------------------------
 
-export class Engine extends EventEmitter {
+export class Engine extends Emitter {
   private session: EngineSession;
 
   constructor(provider: LLMProvider, verbosity: VerbosityLevel = "medium") {
