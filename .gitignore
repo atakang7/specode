@@ -1,6 +1,10 @@
 node_modules/
 dist/
 .env
+.env.*
+!.env.example
 specs/
+coverage/
 *.tsbuildinfo
-runner/node_modules/
+*.log
+.DS_Store
