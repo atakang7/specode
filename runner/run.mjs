@@ -62,7 +62,6 @@ function httpRequest(url, options, body) {
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end",  () => resolve({ statusCode: res.statusCode, body: Buffer.concat(chunks).toString("utf8") }));
     });
-    req.setTimeout(60_000, () => req.destroy(new Error("Ollama request timed out after 60 seconds")));
     req.on("error", reject);
     if (body) req.write(body);
     req.end();
@@ -100,7 +99,6 @@ function httpStreamLines(url, options, body, onLine) {
         resolve();
       });
     });
-    req.setTimeout(60_000, () => req.destroy(new Error("Ollama request timed out after 60 seconds")));
     req.on("error", reject);
     if (body) req.write(body);
     req.end();
