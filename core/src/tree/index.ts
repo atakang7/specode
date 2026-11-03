@@ -147,7 +147,7 @@ function patchNodes(
   patch: Partial<Pick<SpecNode, "value" | "status" | "openQuestions" | "children">>
 ): SpecNode[] {
   return nodes.map((node) => {
-    if (node.id === nodeId) {
+    if (node.id === nodeId || (nodeId.length >= 8 && node.id.startsWith(nodeId))) {
       return { ...node, ...patch, updatedAt: new Date().toISOString() };
     }
     if (node.children.length > 0) {
@@ -180,7 +180,7 @@ export function addChildNode(
 
 function insertChild(nodes: SpecNode[], parentId: string, child: SpecNode): SpecNode[] {
   return nodes.map((node) => {
-    if (node.id === parentId) return { ...node, children: [...node.children, child] };
+    if (node.id === parentId || (parentId.length >= 8 && node.id.startsWith(parentId))) return { ...node, children: [...node.children, child] };
     if (node.children.length > 0) return { ...node, children: insertChild(node.children, parentId, child) };
     return node;
   });
