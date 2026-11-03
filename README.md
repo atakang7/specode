@@ -1,10 +1,22 @@
-# Specode
+# specode
 
-Specode asks questions about an application and saves the answers as a JSON specification tree. The standalone runner talks to a local Ollama model and keeps each session on disk.
+Specode uses a local Ollama model to turn application ideas into a JSON specification through follow-up questions.
 
-## Quick start
+```text
++----------+  input  +----------------+  HTTP  +--------+
+| readline | ------> | runner/run.mjs | -----> | Ollama |
++----------+         +----------------+        +--------+
+                            |
+                          writes
+                            v
+                    +----------------------+
+                    | specs/<id>/tree.json |
+                    +----------------------+
+```
 
-Use Node 22.16.0 and a running Ollama service. No npm install is needed for the runner.
+## Run
+
+Node 22.16.0 and Ollama are required; start `ollama serve` in another terminal if needed.
 
 ```bash
 git clone https://github.com/atakang7/specode.git
@@ -13,58 +25,51 @@ ollama pull gemma2:2b
 node runner/run.mjs "a todo app in TypeScript"
 ```
 
-Start Ollama separately if it is not running (`ollama serve`). A session ID appears in the terminal header.
+Resume with `node runner/run.mjs --resume <session-id>`; type `/quit` to save and exit.
 
-```bash
-node runner/run.mjs --resume <session-id>
-```
-
-Type `/verbosity low`, `/verbosity medium` or `/verbosity high` to change how far the model follows up on a topic. Type `/quit` to stop.
-
-## Configuration
-
-The runner reads environment variables. To use the included example on Node 22:
+To load values from `.env.example`:
 
 ```bash
 cp .env.example .env
 node --env-file=.env runner/run.mjs "a todo app in TypeScript"
 ```
 
-| Variable | Default | Used by |
+## Config
+
+| Variable | Default | What |
 | --- | --- | --- |
-| `SPECODE_MODEL` | `gemma2:2b` | Runner |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Runner and core Ollama adapter |
-| `SPECODE_VERBOSITY` | `medium` | Runner and Ink CLI |
-| `SPECODE_HTTP_TIMEOUT_MS` | `120000` | Runner and core adapters |
+| `SPECODE_MODEL` | `gemma2:2b` | Ollama model |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama HTTP endpoint |
+| `SPECODE_VERBOSITY` | `medium` | Question depth: `low`, `medium`, `high` |
+| `SPECODE_HTTP_TIMEOUT_MS` | `120000` | Request inactivity timeout in milliseconds |
 
-The standalone runner only supports Ollama. `SPECODE_PROVIDER`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_URL` and `OPENAI_API_URL` belong to the separate TypeScript provider adapters. If you use those adapters, set a model suited to that provider. A `.env` file is not loaded unless you pass `--env-file` or export its values yourself.
+## CI
 
-## How it works
-
-The runner starts with eight top-level nodes, including platform and features. It selects an incomplete node, asks a question and applies the next model response to the tree. It marks unanswered nodes with an explicit assumption after three attempts. Coverage is weighted by node type.
-
-Session files are written to `specs/<session-id>/`: `tree.json` is the current specification, `tree.vN.json` stores snapshots, `conversation.jsonl` records turns, and `session.json` holds metadata. The `specs/` directory is ignored by Git.
-
-## Development and usage
-
-```bash
-npm install
-npm run check:runner
-npm test
-npm run build
+```text
++-----------+  triggers  +--------+  runs  +-------------+
+| push / PR | ---------> | ci.yml | -----> | npm install |
++-----------+            +--------+        +-------------+
+                                                |
+                                              runs
+                                                v
+                                        +------------------+
+                                        | check:runner     |
+                                        +------------------+
+                                                |
+                                              runs
+                                                v
+                                          +----------+
+                                          | npm test |
+                                          +----------+
 ```
 
-For browser development, copy `web/.env.example` to `web/.env` and run `npm run dev:web`. The browser UI connects to local Ollama; it has no hosted-provider credential flow.
+`npm test` builds the TypeScript workspaces and runs the runner, tree, engine and CLI tests.
 
-`core/` contains the TypeScript tree engine and provider adapters. `cli/` contains an Ink interface, while `web/` contains a Vite browser prototype. The runner uses its own tree and Ollama code, so changes to `core/` do not automatically change runner behavior. See [ARCHITECTURE.md](ARCHITECTURE.md) for the differences.
+## Limits
 
-Use `specs/<session-id>/tree.json` as input to another tool. Specode has no hosted service or deployment command. Run the CLI locally; the browser prototype is not suitable for public deployment with API credentials.
+- The standalone runner supports Ollama only; the TypeScript adapters have separate provider settings.
+- Sessions live in `specs/<session-id>/`, including `tree.json` and the conversation log.
+- The browser prototype has no credential-protecting backend and is not intended for public deployment.
+- Invalid model responses may stop a session; resume the saved session after fixing the issue.
 
-## Limitations
-
-- A local Ollama service and downloaded model are needed for the runner.
-- Model output can be invalid. The runner stops after three failed parse attempts and leaves the saved session available to resume.
-- The TypeScript engine, Ink CLI and browser prototype are separate from the runner. Their session behavior and provider support differ.
-- The browser prototype has no backend for protecting provider API keys; do not place keys in client-side builds.
-
-MIT license. See [LICENSE](LICENSE).
+[Architecture](ARCHITECTURE.md) | [Contributing](CONTRIBUTING.md) | [License](LICENSE)
