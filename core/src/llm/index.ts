@@ -33,6 +33,7 @@ export class ClaudeProvider implements LLMProvider {
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
+      signal: AbortSignal.timeout(30_000),
       headers: {
         "Content-Type":      "application/json",
         "x-api-key":         this.apiKey,
@@ -79,6 +80,7 @@ export class OpenAIProvider implements LLMProvider {
   async complete(messages: LLMMessage[]): Promise<LLMResponse> {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
+      signal: AbortSignal.timeout(30_000),
       headers: {
         "Content-Type":  "application/json",
         "Authorization": `Bearer ${this.apiKey}`,
@@ -124,6 +126,7 @@ export class OllamaProvider implements LLMProvider {
   async complete(messages: LLMMessage[]): Promise<LLMResponse> {
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: "POST",
+      signal: AbortSignal.timeout(30_000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model:    this.model,
