@@ -54,6 +54,8 @@ npm test
 npm run build
 ```
 
+For browser development, copy `web/.env.example` to `web/.env` and run `npm run dev:web`. The browser UI connects to local Ollama; it has no hosted-provider credential flow.
+
 `core/` contains the TypeScript tree engine and provider adapters. `cli/` contains an Ink interface, while `web/` contains a Vite browser prototype. The runner uses its own tree and Ollama code, so changes to `core/` do not automatically change runner behavior. See [ARCHITECTURE.md](ARCHITECTURE.md) for the differences.
 
 Use `specs/<session-id>/tree.json` as input to another tool. Specode has no hosted service or deployment command. Run the CLI locally; the browser prototype is not suitable for public deployment with API credentials.
