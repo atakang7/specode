@@ -1,3 +1,19 @@
+/**
+ * SPECODE — Prompt Engineering Layer
+ *
+ * This is the most important file in the project.
+ *
+ * Core philosophy:
+ *   The STRUCTURE does the thinking, not the LLM.
+ *   Prompts encode domain expertise so that even small models
+ *   can produce high-quality spec elicitation.
+ *
+ * Responsibilities:
+ *   1. SYSTEM PROMPT — defines the AI's role and strict output contract
+ *   2. CONTEXT INJECTION — serializes current tree state into the prompt
+ *   3. QUESTION RENDERING — renders questions at the correct verbosity level
+ *   4. RESPONSE PARSING — validates and parses the structured LLM response
+ */
 
 import {
   SpecTree,
@@ -9,6 +25,7 @@ import {
 } from "../types/index.js";
 import { flattenNodes } from "../tree/index.js";
 
+// ---------------------------------------------------------------------------
 // System prompt
 //
 // Key design decisions:
@@ -17,6 +34,8 @@ import { flattenNodes } from "../tree/index.js";
 //   - Tree is the source of truth — conversation is just the editing interface
 //   - Shared pattern detection is a first-class responsibility
 //   - "complete" status has a precise definition: implementable without questions
+// ---------------------------------------------------------------------------
+
 export function buildSystemPrompt(verbosity: VerbosityLevel): string {
   return `/no_think
 You are SPECODE, a spec elicitation engine. Your job is to fill a structured application spec tree by asking the user precise questions. The tree is the application specification — when complete, an LLM must be able to implement the full application without asking any further questions.
@@ -84,6 +103,7 @@ const VERBOSITY_INSTRUCTIONS: Record<VerbosityLevel, string> = {
     `HIGH — Full context: explain the question, all options, tradeoffs, and how the answer shapes downstream spec decisions. 3–5 sentences.`,
 };
 
+// ---------------------------------------------------------------------------
 // Build the full message array for an LLM call.
 //
 // Injects:
@@ -91,6 +111,8 @@ const VERBOSITY_INSTRUCTIONS: Record<VerbosityLevel, string> = {
 //   2. Current tree state (serialized as structured context)
 //   3. Conversation history (so the AI knows what was already asked/answered)
 //   4. Current gap analysis target (the specific gap to ask about next)
+// ---------------------------------------------------------------------------
+
 export function buildMessages(
   tree: SpecTree,
   gapAnalysis: GapAnalysis,
@@ -116,9 +138,12 @@ export function buildMessages(
   return messages;
 }
 
+// ---------------------------------------------------------------------------
 // Serialize the spec tree into a compact, readable context block.
 // This is exactly what the LLM "sees" as the current spec state.
 // Format is intentionally human-readable — it works across all model sizes.
+// ---------------------------------------------------------------------------
+
 function serializeTree(tree: SpecTree, gapAnalysis: GapAnalysis): string {
   const allNodes = flattenNodes(tree.nodes);
 
@@ -181,12 +206,15 @@ Respond with JSON where "question" is a congratulations message summarizing what
 Produce your JSON response. If the user just answered something else, extract and update that node first in nodeUpdate, then ask about this gap.`;
 }
 
+// ---------------------------------------------------------------------------
 // Parse and validate the LLM's JSON response.
 //
 // With Ollama structured output (format: schema), parsing should never fail.
 // Validation is strict — missing required fields throw immediately so the
 // caller can retry or surface the error rather than silently proceeding with
 // a malformed state.
+// ---------------------------------------------------------------------------
+
 export interface ParsedLLMResponse {
   question:              string;
   targetNodeId:          string | null;
@@ -260,7 +288,10 @@ export function parseLLMResponse(raw: string): ParsedLLMResponse {
   };
 }
 
+// ---------------------------------------------------------------------------
 // Render a node summary for display in the UI.
+// ---------------------------------------------------------------------------
+
 export function renderNodeSummary(node: SpecNode, depth = 0): string {
   const indent = "  ".repeat(depth);
   const icon   = statusIcon(node.status);

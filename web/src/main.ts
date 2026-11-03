@@ -1,3 +1,26 @@
+/**
+ * SPECODE Web UI
+ *
+ * Vanilla TypeScript, no framework. The Engine drives all state — the UI
+ * only renders what the engine emits. Terminal-aesthetic: monospace,
+ * dark, functional colors, no decoration.
+ *
+ * Layout:
+ *   ┌── header ──────────────────────────────────────┐
+ *   │ SPECODE   session: abc123   coverage: 42%       │
+ *   ├── tree panel ─────────┬── chat panel ───────────┤
+ *   │ ✓ Intent: todo app   │ AI: target platform?    │
+ *   │ ~ Platform           │ You: web                │
+ *   │ ○ Features           │ AI: auth strategy?      │
+ *   ├── status bar ─────────┴─────────────────────────┤
+ *   │ coverage: 42%  verbosity: [L][M][H]  ready      │
+ *   ├── input bar ───────────────────────────────────  │
+ *   │ > _                                             │
+ *   └─────────────────────────────────────────────────┘
+ *
+ * State is also persisted to localStorage so sessions survive page reloads.
+ * Commands: /verbosity low|medium|high   /save   /clear
+ */
 
 import {
   Engine,
@@ -5,10 +28,13 @@ import {
   SpecNode,
   ConversationTurn,
   VerbosityLevel,
-  OllamaProvider,
+  createProviderFromEnv,
 } from "@specode/core";
 
+// ---------------------------------------------------------------------------
 // Bootstrap — build layout, wire up engine
+// ---------------------------------------------------------------------------
+
 const app = document.getElementById("app")!;
 app.innerHTML = buildLayout();
 
@@ -41,13 +67,15 @@ el.verbosityBtns.forEach((btn) => {
   });
 });
 
+// ---------------------------------------------------------------------------
 // Engine
+// ---------------------------------------------------------------------------
+
 let engine: Engine;
 
 try {
-  const model = import.meta.env.VITE_OLLAMA_MODEL || "gemma2:2b";
-  const baseUrl = import.meta.env.VITE_OLLAMA_BASE_URL || "http://localhost:11434";
-  engine = new Engine(new OllamaProvider(model, baseUrl), "medium");
+  const provider = createProviderFromEnv();
+  engine = new Engine(provider, "medium");
 } catch (err) {
   showFatal(err instanceof Error ? err.message : String(err));
   // Stop here — engine is undefined, event handlers are never attached
@@ -93,13 +121,15 @@ engine.on("error", (msg: string) => {
   el.input.disabled = false;
 });
 
+// ---------------------------------------------------------------------------
 // Start or resume session
+// ---------------------------------------------------------------------------
+
 const intentParam = new URLSearchParams(window.location.search).get("intent")?.trim();
 const savedState  = loadFromStorage();
 
 if (savedState) {
-  // Restore the engine as well as the visible tree.
-  engine.restore(savedState.tree, savedState.conversation);
+  // Resume from localStorage
   renderTree(savedState.tree);
   updateCoverage(savedState.tree);
   for (const turn of savedState.conversation) {
@@ -113,7 +143,10 @@ if (savedState) {
   engine.start(intent).then(() => el.input.focus());
 }
 
+// ---------------------------------------------------------------------------
 // Input
+// ---------------------------------------------------------------------------
+
 async function handleInput(value: string): Promise<void> {
   if (value.startsWith("/")) {
     handleCommand(value);
@@ -159,7 +192,10 @@ function handleCommand(cmd: string): void {
   }
 }
 
+// ---------------------------------------------------------------------------
 // Tree rendering
+// ---------------------------------------------------------------------------
+
 function renderTree(tree: SpecTree): void {
   const lines: string[] = [];
   for (const node of tree.nodes) renderNodeLines(node, 0, lines);
@@ -194,7 +230,10 @@ function statusIcon(status: SpecNode["status"]): string {
   return { complete: "✓", partial: "~", empty: "○", "n/a": "-" }[status] ?? "?";
 }
 
+// ---------------------------------------------------------------------------
 // Chat rendering
+// ---------------------------------------------------------------------------
+
 function appendMessage(role: "ai" | "user", content: string): void {
   const div = document.createElement("div");
   div.className = `chat-turn role-${role}`;
@@ -219,7 +258,10 @@ function removeThinking(): void {
   document.getElementById("thinking")?.remove();
 }
 
+// ---------------------------------------------------------------------------
 // Status / coverage
+// ---------------------------------------------------------------------------
+
 function updateCoverage(tree: SpecTree): void {
   el.coverageStat.className   = `stat-value ${tree.completeness >= 85 ? "ok" : tree.completeness >= 50 ? "warn" : "low"}`;
   el.coverageStat.textContent = `${tree.completeness}%`;
@@ -237,13 +279,16 @@ function showFatal(msg: string): void {
   app.innerHTML = `<div style="padding:32px;color:#f04a4a;font-family:monospace;white-space:pre-wrap">
 Fatal error: ${esc(msg)}
 
-Check Ollama and the VITE_OLLAMA_BASE_URL setting
+Check your environment variables (SPECODE_PROVIDER, ANTHROPIC_API_KEY, etc.)
 and reload the page.
   </div>`;
 }
 
+// ---------------------------------------------------------------------------
 // localStorage persistence
 // Survives page reloads — same model as disk persistence in the runner.
+// ---------------------------------------------------------------------------
+
 interface StoredSession {
   tree:         SpecTree;
   conversation: ConversationTurn[];
@@ -269,7 +314,10 @@ function loadFromStorage(): StoredSession | null {
   }
 }
 
+// ---------------------------------------------------------------------------
 // XSS-safe escaping for all content rendered via innerHTML
+// ---------------------------------------------------------------------------
+
 function esc(str: string): string {
   return str
     .replace(/&/g, "&amp;")
@@ -279,7 +327,10 @@ function esc(str: string): string {
     .replace(/'/g, "&#39;");
 }
 
+// ---------------------------------------------------------------------------
 // Layout HTML
+// ---------------------------------------------------------------------------
+
 function buildLayout(): string {
   return `
     <div id="header">
