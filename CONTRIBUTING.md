@@ -1,20 +1,20 @@
 # Contributing
 
-Changes to the Node runner and TypeScript engine need separate checks because the runner does not import the engine.
+Use Node 22.16.0 and check the runner separately from the TypeScript engine.
 
-## Setup
+## Verify
 
 ```bash
-git clone https://github.com/atakang7/specode.git
-cd specode
 npm install
 npm run check:runner
 npm test
-npm run build
 ```
 
-Tests under `runner/test/` use a local HTTP server to verify failure paths without an installed model. For an interactive check, start Ollama, pull `gemma2:2b` and run `node runner/run.mjs "a todo app in TypeScript"`.
+`npm test` builds all three TypeScript workspaces and runs the Node test files without an Ollama model.
 
-Keep changes narrow. If you change the session JSON format or question flow, check that a saved session can still be resumed. Document new environment variables in `.env.example` and user-visible behavior in the README.
+## Changes
 
-Do not commit files from `specs/` or API keys. Include the commands you ran and any untested model behavior in pull requests.
+- Check both runner and core when changing question flow or tree state.
+- Keep `specs/` and credentials out of commits.
+- Document any new environment variable in `.env.example`.
+- Include verification commands and untested model behavior in the PR.
