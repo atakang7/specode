@@ -24,7 +24,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
-import { render, Box, Text, useInput, useApp } from "ink";
+import { render, Box, Text, useApp } from "ink";
 import TextInput from "ink-text-input";
 import {
   Engine,
@@ -37,10 +37,7 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 
-// ---------------------------------------------------------------------------
 // CLI entry — parse args and launch the Ink app
-// ---------------------------------------------------------------------------
-
 const rawIntent = process.argv.slice(2).join(" ").trim();
 const verbosity = (process.env.SPECODE_VERBOSITY as VerbosityLevel) ?? "medium";
 
@@ -50,22 +47,18 @@ if (!rawIntent) {
   process.exit(1);
 }
 
-let provider;
-try {
-  provider = createProviderFromEnv();
-} catch (err) {
-  console.error(
-    `Provider error: ${err instanceof Error ? err.message : String(err)}`
-  );
-  process.exit(1);
-}
+const provider = (() => {
+  try {
+    return createProviderFromEnv();
+  } catch (err) {
+    console.error(`Provider error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+})();
 
 const engine = new Engine(provider, verbosity);
 
-// ---------------------------------------------------------------------------
 // Root app component
-// ---------------------------------------------------------------------------
-
 function App() {
   const { exit } = useApp();
   const [tree, setTree] = useState<SpecTree | null>(null);
@@ -191,10 +184,7 @@ function App() {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Tree Panel — left side, shows the spec tree
-// ---------------------------------------------------------------------------
-
 function TreePanel({ tree }: { tree: SpecTree }) {
   const width = 40;
   const lines: string[] = [];
@@ -231,10 +221,7 @@ function TreePanel({ tree }: { tree: SpecTree }) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Conversation Panel — right side, shows the dialogue
-// ---------------------------------------------------------------------------
-
 function ConversationPanel({
   turns,
   isThinking,
@@ -269,10 +256,7 @@ function ConversationPanel({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Status Bar
-// ---------------------------------------------------------------------------
-
 function StatusBar({
   tree,
   statusMessage,
@@ -302,10 +286,7 @@ function StatusBar({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Input Bar
-// ---------------------------------------------------------------------------
-
 function InputBar({
   value,
   onChange,
@@ -333,8 +314,5 @@ function InputBar({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Launch
-// ---------------------------------------------------------------------------
-
 render(<App />);

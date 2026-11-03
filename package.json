@@ -11,6 +11,11 @@
   "scripts": {
     "build": "npm run build --workspaces",
     "dev:cli": "npm run dev --workspace=cli",
-    "dev:web": "npm run dev --workspace=web"
+    "dev:web": "npm run dev --workspace=web",
+    "test": "npm run build && node --test runner/test/*.test.mjs core/test/*.test.mjs cli/test/*.test.mjs",
+    "check:runner": "node --check runner/run.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0"
   }
 }

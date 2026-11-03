@@ -1,17 +1,3 @@
-/**
- * SPECODE — Spec Tree Engine
- *
- * This module owns all tree operations:
- *   - Initializing a tree from raw user intent
- *   - Expanding nodes when new information arrives
- *   - Detecting and hoisting shared subtrees (defined once, referenced everywhere)
- *   - Scoring completeness
- *   - Running gap analysis to find the next best question
- *
- * Design principle: the tree is the single source of truth.
- * The LLM reads tree state and produces structured patches.
- * This module applies those patches — it never calls the LLM directly.
- */
 
 import { v4 as uuid } from "uuid";
 import {
@@ -22,11 +8,9 @@ import {
   VerbosityLevel,
 } from "../types/index.js";
 
-// ---------------------------------------------------------------------------
 // Node priority — higher means "ask about this first"
 // Encodes domain expertise: intent and platform must be known before anything
 // else can be meaningfully specified.
-// ---------------------------------------------------------------------------
 
 export const KIND_PRIORITY: Record<NodeKind, number> = {
   intent:       100,
@@ -41,10 +25,8 @@ export const KIND_PRIORITY: Record<NodeKind, number> = {
   shared:        30,
 };
 
-// ---------------------------------------------------------------------------
 // Known shared patterns — when these labels appear inside multiple feature
 // subtrees, they get hoisted into tree.shared and replaced with sharedRef.
-// ---------------------------------------------------------------------------
 
 const SHARED_PATTERNS = [
   "authentication", "authorization", "notifications", "file upload",
@@ -52,9 +34,7 @@ const SHARED_PATTERNS = [
   "internationalization", "theming", "rate limiting", "caching",
 ];
 
-// ---------------------------------------------------------------------------
 // Factory
-// ---------------------------------------------------------------------------
 
 export function makeNode(
   label: string,
@@ -75,11 +55,9 @@ export function makeNode(
   };
 }
 
-// ---------------------------------------------------------------------------
 // Initialize a fresh spec tree from raw user intent.
 // Builds the top-level skeleton. The AI expands nodes as the conversation
 // progresses — the tree starts sparse by design.
-// ---------------------------------------------------------------------------
 
 export function initTree(
   rawIntent: string,
@@ -120,10 +98,8 @@ export function initTree(
   return { ...tree, completeness: scoreTree(tree) };
 }
 
-// ---------------------------------------------------------------------------
 // Update a node with new information.
 // Called after the LLM processes a user answer and returns a structured patch.
-// ---------------------------------------------------------------------------
 
 export function updateNode(
   tree: SpecTree,
@@ -141,13 +117,17 @@ export function updateNode(
   return { ...updated, completeness: scoreTree(updated) };
 }
 
+function nodeMatches(node: SpecNode, id: string): boolean {
+  return node.id === id || (id.length >= 8 && node.id.startsWith(id));
+}
+
 function patchNodes(
   nodes: SpecNode[],
   nodeId: string,
   patch: Partial<Pick<SpecNode, "value" | "status" | "openQuestions" | "children">>
 ): SpecNode[] {
   return nodes.map((node) => {
-    if (node.id === nodeId) {
+    if (nodeMatches(node, nodeId)) {
       return { ...node, ...patch, updatedAt: new Date().toISOString() };
     }
     if (node.children.length > 0) {
@@ -157,17 +137,20 @@ function patchNodes(
   });
 }
 
-// ---------------------------------------------------------------------------
 // Add a new child node under a parent.
 // Called when the LLM determines a user answer implies a new sub-spec
 // (e.g. "OAuth" under auth implies "OAuth Provider Config").
-// ---------------------------------------------------------------------------
 
 export function addChildNode(
   tree: SpecTree,
   parentId: string,
   child: Omit<SpecNode, "id" | "updatedAt">
 ): SpecTree {
+  const parent = findNodeById(tree, parentId);
+  if (!parent || parent.status === "complete" ||
+      parent.children.some((existing) => existing.label.toLowerCase() === child.label.toLowerCase())) {
+    return tree;
+  }
   const newChild: SpecNode = {
     ...child,
     id: uuid(),
@@ -180,13 +163,12 @@ export function addChildNode(
 
 function insertChild(nodes: SpecNode[], parentId: string, child: SpecNode): SpecNode[] {
   return nodes.map((node) => {
-    if (node.id === parentId) return { ...node, children: [...node.children, child] };
+    if (nodeMatches(node, parentId)) return { ...node, children: [...node.children, child] };
     if (node.children.length > 0) return { ...node, children: insertChild(node.children, parentId, child) };
     return node;
   });
 }
 
-// ---------------------------------------------------------------------------
 // Detect shared patterns and hoist them.
 //
 // When the same concept appears as a child of multiple feature nodes:
@@ -194,7 +176,6 @@ function insertChild(nodes: SpecNode[], parentId: string, child: SpecNode): Spec
 //   2. Replace all duplicate children with sharedRef pointers
 //
 // This keeps the tree DRY — shared specs are defined once, referenced everywhere.
-// ---------------------------------------------------------------------------
 
 export function hoistSharedSubtrees(tree: SpecTree): SpecTree {
   // Only scan feature nodes — shared patterns live in features, not in
@@ -273,7 +254,6 @@ function replaceWithSharedRef(
   });
 }
 
-// ---------------------------------------------------------------------------
 // Gap analysis — finds the highest-priority incomplete node to ask about.
 //
 // Core of the non-sequential conversation model: instead of a fixed question
@@ -281,7 +261,6 @@ function replaceWithSharedRef(
 //
 // A node is eligible for a question only if its dependencies are at least
 // partially filled — we can't ask about Features before knowing Intent.
-// ---------------------------------------------------------------------------
 
 export function analyzeGaps(tree: SpecTree): GapAnalysis {
   const allNodes = flattenNodes(tree.nodes);
@@ -349,10 +328,8 @@ function validateNoCycles(nodes: SpecNode[]): void {
   for (const node of nodes) dfs(node.id, []);
 }
 
-// ---------------------------------------------------------------------------
 // Scoring — 0–100 completeness weighted by node kind priority.
 // A missing "intent" node hurts far more than a missing "constraint" node.
-// ---------------------------------------------------------------------------
 
 export function scoreTree(tree: SpecTree): number {
   const allNodes = flattenNodes(tree.nodes);
@@ -372,9 +349,7 @@ export function scoreTree(tree: SpecTree): number {
   return Math.round((filledWeight / totalWeight) * 100);
 }
 
-// ---------------------------------------------------------------------------
 // Utilities
-// ---------------------------------------------------------------------------
 
 export function flattenNodes(nodes: SpecNode[]): SpecNode[] {
   const result: SpecNode[] = [];
@@ -386,7 +361,7 @@ export function flattenNodes(nodes: SpecNode[]): SpecNode[] {
 }
 
 export function findNodeById(tree: SpecTree, id: string): SpecNode | undefined {
-  return flattenNodes([...tree.nodes, ...tree.shared]).find((n) => n.id === id);
+  return flattenNodes([...tree.nodes, ...tree.shared]).find((n) => nodeMatches(n, id));
 }
 
 function deriveTitle(rawIntent: string): string {

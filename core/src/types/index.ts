@@ -1,31 +1,15 @@
-/**
- * SPECODE — Core Types
- *
- * These types define the entire shape of the spec system.
- * The SpecTree is the single source of truth. Everything else
- * (LLM prompts, UI rendering, code generation) reads from it.
- */
 
-// ---------------------------------------------------------------------------
 // Verbosity level — controls how the AI communicates with the user
-// ---------------------------------------------------------------------------
-
 export type VerbosityLevel = "low" | "medium" | "high";
 
-// ---------------------------------------------------------------------------
 // Node status — tracks completeness of every spec atom
-// ---------------------------------------------------------------------------
-
 export type NodeStatus =
   | "empty"       // Not yet touched
   | "partial"     // Some info gathered, still has unresolved gaps
   | "complete"    // Fully resolved, ready for code generation
   | "n/a";        // Not applicable given the project context
 
-// ---------------------------------------------------------------------------
 // Node types — what kind of spec atom this node represents
-// ---------------------------------------------------------------------------
-
 export type NodeKind =
   | "intent"        // What the app does at the highest level
   | "platform"      // Target platform: web, desktop, embedded, mobile, cli
@@ -38,10 +22,7 @@ export type NodeKind =
   | "flow"          // A sequence of interactions or operations
   | "shared";       // A subtree hoisted because it appears in multiple places
 
-// ---------------------------------------------------------------------------
 // A single node in the spec tree
-// ---------------------------------------------------------------------------
-
 export interface SpecNode {
   /** Unique identifier within the tree */
   id: string;
@@ -87,10 +68,7 @@ export interface SpecNode {
   openQuestions: string[];
 }
 
-// ---------------------------------------------------------------------------
 // The full spec tree
-// ---------------------------------------------------------------------------
-
 export interface SpecTree {
   /** Unique spec session ID */
   id: string;
@@ -121,10 +99,7 @@ export interface SpecTree {
   updatedAt: string;
 }
 
-// ---------------------------------------------------------------------------
 // A single turn in the conversation
-// ---------------------------------------------------------------------------
-
 export interface ConversationTurn {
   role: "ai" | "user";
   content: string;
@@ -133,10 +108,7 @@ export interface ConversationTurn {
   timestamp: string;
 }
 
-// ---------------------------------------------------------------------------
 // LLM provider abstraction
-// ---------------------------------------------------------------------------
-
 export interface LLMMessage {
   role: "system" | "user" | "assistant";
   content: string;
@@ -157,10 +129,7 @@ export interface LLMProvider {
   complete(messages: LLMMessage[]): Promise<LLMResponse>;
 }
 
-// ---------------------------------------------------------------------------
 // The result of a gap-detection pass on the tree
-// ---------------------------------------------------------------------------
-
 export interface GapAnalysis {
   /** The single highest-priority node to ask about next */
   priorityNode: SpecNode | null;
@@ -178,10 +147,7 @@ export interface GapAnalysis {
   isComplete: boolean;
 }
 
-// ---------------------------------------------------------------------------
 // Engine session — runtime state managed by the engine
-// ---------------------------------------------------------------------------
-
 export interface EngineSession {
   tree: SpecTree;
   conversation: ConversationTurn[];

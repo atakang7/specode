@@ -1,21 +1,16 @@
-/**
- * SPECODE — LLM Provider Adapters
- *
- * The engine only ever calls the LLMProvider interface.
- * This module provides concrete adapters for common providers.
- *
- * Adding a new provider:
- *   1. Implement the LLMProvider interface
- *   2. Export it from this file
- *   3. Add it to createProviderFromEnv()
- *   That's it — the engine needs no other changes.
- */
 
 import { LLMProvider, LLMMessage, LLMResponse } from "../types/index.js";
 
-// ---------------------------------------------------------------------------
+function requestTimeoutMs(): number {
+  const raw = typeof process === "undefined" ? undefined : process.env.SPECODE_HTTP_TIMEOUT_MS;
+  const ms = Number(raw ?? 120000);
+  if (!Number.isSafeInteger(ms) || ms < 1000) {
+    throw new Error("SPECODE_HTTP_TIMEOUT_MS must be an integer of at least 1000");
+  }
+  return ms;
+}
+
 // Anthropic Claude
-// ---------------------------------------------------------------------------
 
 export class ClaudeProvider implements LLMProvider {
   name = "claude";
@@ -31,8 +26,9 @@ export class ClaudeProvider implements LLMProvider {
     const systemMessage       = messages.find((m) => m.role === "system");
     const conversationMessages = messages.filter((m) => m.role !== "system");
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch(process.env.ANTHROPIC_API_URL ?? "https://api.anthropic.com/v1/messages", {
       method: "POST",
+      signal: AbortSignal.timeout(requestTimeoutMs()),
       headers: {
         "Content-Type":      "application/json",
         "x-api-key":         this.apiKey,
@@ -47,7 +43,7 @@ export class ClaudeProvider implements LLMProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`Claude API ${response.status}: ${await response.text()}`);
+      throw new Error(`Claude API ${response.status}: ${(await response.text()).slice(0, 500)}`);
     }
 
     const data = (await response.json()) as {
@@ -62,9 +58,7 @@ export class ClaudeProvider implements LLMProvider {
   }
 }
 
-// ---------------------------------------------------------------------------
 // OpenAI
-// ---------------------------------------------------------------------------
 
 export class OpenAIProvider implements LLMProvider {
   name = "openai";
@@ -77,8 +71,9 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async complete(messages: LLMMessage[]): Promise<LLMResponse> {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const response = await fetch(process.env.OPENAI_API_URL ?? "https://api.openai.com/v1/chat/completions", {
       method: "POST",
+      signal: AbortSignal.timeout(requestTimeoutMs()),
       headers: {
         "Content-Type":  "application/json",
         "Authorization": `Bearer ${this.apiKey}`,
@@ -92,7 +87,7 @@ export class OpenAIProvider implements LLMProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`OpenAI API ${response.status}: ${await response.text()}`);
+      throw new Error(`OpenAI API ${response.status}: ${(await response.text()).slice(0, 500)}`);
     }
 
     const data = (await response.json()) as {
@@ -107,9 +102,7 @@ export class OpenAIProvider implements LLMProvider {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Ollama (local models)
-// ---------------------------------------------------------------------------
 
 export class OllamaProvider implements LLMProvider {
   name = "ollama";
@@ -124,6 +117,7 @@ export class OllamaProvider implements LLMProvider {
   async complete(messages: LLMMessage[]): Promise<LLMResponse> {
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: "POST",
+      signal: AbortSignal.timeout(requestTimeoutMs()),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model:    this.model,
@@ -134,7 +128,7 @@ export class OllamaProvider implements LLMProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`Ollama ${response.status}: ${await response.text()}`);
+      throw new Error(`Ollama ${response.status}: ${(await response.text()).slice(0, 500)}`);
     }
 
     const data = (await response.json()) as { message: { content: string } };
@@ -142,9 +136,7 @@ export class OllamaProvider implements LLMProvider {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Factory — create a provider from environment variables
-// ---------------------------------------------------------------------------
 
 export function createProviderFromEnv(): LLMProvider {
   const provider = process.env.SPECODE_PROVIDER ?? "claude";
