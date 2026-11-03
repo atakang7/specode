@@ -1,7 +1,7 @@
 /**
  * SPECODE — Runner
  *
- * Self-contained script. No build step. Runs directly with Node 18+.
+ * Self-contained Ollama runner. Runs with Node 22.
  *
  * State model — everything lives on disk, nothing is transient:
  *
@@ -20,7 +20,7 @@
  *   node runner/run.mjs --resume <session-id>
  *
  * Environment:
- *   SPECODE_MODEL     ollama model name (default: qwen3.5:0.8b)
+ *   SPECODE_MODEL     Ollama model name (default: gemma2:2b)
  *   OLLAMA_BASE_URL   ollama endpoint   (default: http://localhost:11434)
  *   SPECODE_VERBOSITY low | medium | high (default: medium)
  */
@@ -31,6 +31,7 @@ import * as path     from "path";
 import * as cryptoMod from "crypto";
 import * as http     from "http";
 import * as https    from "https";
+import { StringDecoder } from "string_decoder";
 
 // randomUUID was added in Node 14.17 — fall back to v4 UUID via randomBytes for older Node
 function randomUUID() {
@@ -41,64 +42,86 @@ function randomUUID() {
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
 
-// ---------------------------------------------------------------------------
-// HTTP helper — replaces native fetch (not available in Node < 18)
-// Returns a Promise<{ statusCode, body: string }> for non-streaming requests,
-// or calls onData(chunk) incrementally for streaming requests.
-// ---------------------------------------------------------------------------
-
+// HTTP requests use an inactivity timeout; local models may take time to respond.
 function httpRequest(url, options, body) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
-    const mod    = parsed.protocol === "https:" ? https : http;
-    const req    = mod.request({
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      reject(new Error("OLLAMA_BASE_URL must use http or https"));
+      return;
+    }
+    const mod = parsed.protocol === "https:" ? https : http;
+    const req = mod.request({
       hostname: parsed.hostname,
-      port:     parsed.port || (parsed.protocol === "https:" ? 443 : 80),
-      path:     parsed.pathname + parsed.search,
-      method:   options.method || "GET",
-      headers:  options.headers || {},
+      port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      method: options.method || "GET",
+      headers: options.headers || {},
     }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
-      res.on("end",  () => resolve({ statusCode: res.statusCode, body: Buffer.concat(chunks).toString("utf8") }));
+      res.on("error", reject);
+      res.on("aborted", () => reject(new Error("Ollama closed the response early")));
+      res.on("end", () => resolve({
+        statusCode: res.statusCode,
+        body: Buffer.concat(chunks).toString("utf8"),
+      }));
     });
+    req.setTimeout(HTTP_TIMEOUT_MS, () => req.destroy(new Error(`Ollama request timed out after ${HTTP_TIMEOUT_MS} ms`)));
     req.on("error", reject);
     if (body) req.write(body);
     req.end();
   });
 }
 
-// Streaming variant — calls onLine(line) for each newline-terminated chunk.
-// Returns a Promise<void> that resolves when the stream ends.
 function httpStreamLines(url, options, body, onLine) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
-    const mod    = parsed.protocol === "https:" ? https : http;
-    const req    = mod.request({
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      reject(new Error("OLLAMA_BASE_URL must use http or https"));
+      return;
+    }
+    const mod = parsed.protocol === "https:" ? https : http;
+    const req = mod.request({
       hostname: parsed.hostname,
-      port:     parsed.port || (parsed.protocol === "https:" ? 443 : 80),
-      path:     parsed.pathname + parsed.search,
-      method:   options.method || "GET",
-      headers:  options.headers || {},
+      port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      method: options.method || "GET",
+      headers: options.headers || {},
     }, (res) => {
       if (res.statusCode !== 200) {
         const chunks = [];
-        res.on("data", c => chunks.push(c));
-        res.on("end",  () => reject(new Error(`HTTP ${res.statusCode}: ${Buffer.concat(chunks).toString("utf8")}`)));
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("error", reject);
+        res.on("aborted", () => reject(new Error("Ollama closed the response early")));
+        res.on("end", () => reject(new Error(`HTTP ${res.statusCode}: ${Buffer.concat(chunks).toString("utf8")}`)));
         return;
       }
       let buf = "";
+      const decoder = new StringDecoder("utf8");
       res.on("data", (chunk) => {
-        buf += chunk.toString("utf8");
-        const lines = buf.split("\n");
-        buf = lines.pop() || "";
-        for (const line of lines) onLine(line);
+        try {
+          buf += decoder.write(chunk);
+          const lines = buf.split("\n");
+          buf = lines.pop() || "";
+          for (const line of lines) onLine(line);
+        } catch (err) {
+          req.destroy(err);
+        }
       });
+      res.on("error", reject);
+      res.on("aborted", () => reject(new Error("Ollama closed the response early")));
       res.on("end", () => {
-        if (buf.trim()) onLine(buf);
-        resolve();
+        try {
+          buf += decoder.end();
+          if (buf.trim()) onLine(buf);
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
       });
     });
+    req.setTimeout(HTTP_TIMEOUT_MS, () => req.destroy(new Error(`Ollama request timed out after ${HTTP_TIMEOUT_MS} ms`)));
     req.on("error", reject);
     if (body) req.write(body);
     req.end();
@@ -113,6 +136,11 @@ const MODEL      = process.env.SPECODE_MODEL     || "gemma2:2b";
 const OLLAMA_URL = process.env.OLLAMA_BASE_URL   || "http://localhost:11434";
 const VERBOSITY  = process.env.SPECODE_VERBOSITY || "medium";
 const SPECS_DIR  = path.resolve("specs");
+const HTTP_TIMEOUT_MS = Number(process.env.SPECODE_HTTP_TIMEOUT_MS || 120000);
+if (!Number.isSafeInteger(HTTP_TIMEOUT_MS) || HTTP_TIMEOUT_MS < 1000) {
+  console.error("SPECODE_HTTP_TIMEOUT_MS must be an integer of at least 1000");
+  process.exit(1);
+}
 
 const isResume = process.argv[2] === "--resume";
 const arg      = process.argv[isResume ? 3 : 2];
@@ -128,6 +156,7 @@ Options:
   SPECODE_MODEL      Ollama model name  (default: gemma2:2b)
   OLLAMA_BASE_URL    Ollama endpoint    (default: http://localhost:11434)
   SPECODE_VERBOSITY  low|medium|high    (default: medium)
+  SPECODE_HTTP_TIMEOUT_MS  inactivity timeout in ms (default: 120000)
   SPECODE_PROVIDER   claude|openai|ollama (default: ollama)
 
 Examples:
@@ -139,6 +168,11 @@ Examples:
 if (!arg || arg === "--help" || arg === "-h") {
   console.log(HELP);
   process.exit(arg ? 0 : 1);
+}
+
+if (isResume && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(arg)) {
+  console.error("Invalid session ID");
+  process.exit(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -224,15 +258,12 @@ async function ollamaStream(messages, onToken) {
     (line) => {
       const trimmed = line.trim();
       if (!trimmed) return;
-      try {
-        const event = JSON.parse(trimmed);
-        const token = (event.message && event.message.content) || "";
-        if (token) {
-          full += token;
-          onToken(token);
-        }
-      } catch {
-        // Incomplete JSON line — ignore
+      const event = JSON.parse(trimmed);
+      if (event.error) throw new Error(`Ollama: ${event.error}`);
+      const token = (event.message && event.message.content) || "";
+      if (token) {
+        full += token;
+        onToken(token);
       }
     }
   );
@@ -798,6 +829,7 @@ async function run() {
   const rl  = readline.createInterface({ input: process.stdin, output: process.stdout });
   const ask = p => new Promise(res => rl.question(p, res));
 
+  let parseFailures = 0;
   while (true) {
     const gaps     = analyzeGaps(tree);
     const turnMode = buildTurnMode(tree, gaps, history);
@@ -831,6 +863,7 @@ async function run() {
       process.stdout.write(`${C.reset}\n`);
     } catch (err) {
       process.stdout.write(`\r${C.red}LLM error: ${err.message}${C.reset}\n`);
+      process.exitCode = 1;
       break;
     }
 
@@ -840,9 +873,17 @@ async function run() {
       parsed = parseLLMResponse(rawResponse);
     } catch (err) {
       console.error(`${C.red}Parse error:${C.reset} ${err.message}`);
+      parseFailures++;
+      if (parseFailures >= 3) {
+        console.error(`${C.red}Stopping after 3 invalid responses.${C.reset}`);
+        process.exitCode = 1;
+        break;
+      }
       console.error(`${C.gray}Retrying turn...${C.reset}`);
-      continue;   // retry the same turn rather than crashing the session
+      continue;
     }
+
+    parseFailures = 0;
 
     // Show the extracted question cleanly below the raw stream
     // If an assumption was applied (3-strike rule), surface it prominently
