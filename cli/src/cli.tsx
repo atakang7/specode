@@ -37,10 +37,7 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 
-// ---------------------------------------------------------------------------
 // CLI entry — parse args and launch the Ink app
-// ---------------------------------------------------------------------------
-
 const rawIntent = process.argv.slice(2).join(" ").trim();
 const verbosity = (process.env.SPECODE_VERBOSITY as VerbosityLevel) ?? "medium";
 
@@ -61,10 +58,7 @@ const provider = (() => {
 
 const engine = new Engine(provider, verbosity);
 
-// ---------------------------------------------------------------------------
 // Root app component
-// ---------------------------------------------------------------------------
-
 function App() {
   const { exit } = useApp();
   const [tree, setTree] = useState<SpecTree | null>(null);
@@ -190,10 +184,7 @@ function App() {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Tree Panel — left side, shows the spec tree
-// ---------------------------------------------------------------------------
-
 function TreePanel({ tree }: { tree: SpecTree }) {
   const width = 40;
   const lines: string[] = [];
@@ -230,10 +221,7 @@ function TreePanel({ tree }: { tree: SpecTree }) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Conversation Panel — right side, shows the dialogue
-// ---------------------------------------------------------------------------
-
 function ConversationPanel({
   turns,
   isThinking,
@@ -268,10 +256,7 @@ function ConversationPanel({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Status Bar
-// ---------------------------------------------------------------------------
-
 function StatusBar({
   tree,
   statusMessage,
@@ -301,10 +286,7 @@ function StatusBar({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Input Bar
-// ---------------------------------------------------------------------------
-
 function InputBar({
   value,
   onChange,
@@ -332,8 +314,5 @@ function InputBar({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Launch
-// ---------------------------------------------------------------------------
-
 render(<App />);

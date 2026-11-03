@@ -1,29 +1,3 @@
-/**
- * SPECODE — Runner
- *
- * Self-contained Ollama runner. Runs with Node 22.
- *
- * State model — everything lives on disk, nothing is transient:
- *
- *   specs/<session-id>/
- *     tree.json            The live spec artifact. Rewritten after every turn.
- *     tree.v<n>.json       Immutable snapshot before each turn (full history).
- *     conversation.jsonl   Append-only log: every turn + the tree mutations it caused.
- *     session.json         Session metadata: intent, model, verbosity, turn count.
- *
- * The tree is the application spec. It exists independently of the conversation.
- * The conversation's only job is to produce mutations to the tree.
- * Kill the process at any point — the tree is intact and fully resumable.
- *
- * Usage:
- *   node runner/run.mjs "a todo app in TypeScript"
- *   node runner/run.mjs --resume <session-id>
- *
- * Environment:
- *   SPECODE_MODEL     Ollama model name (default: gemma2:2b)
- *   OLLAMA_BASE_URL   ollama endpoint   (default: http://localhost:11434)
- *   SPECODE_VERBOSITY low | medium | high (default: medium)
- */
 
 import * as readline from "readline";
 import * as fs       from "fs";
@@ -128,10 +102,7 @@ function httpStreamLines(url, options, body, onLine) {
   });
 }
 
-// ---------------------------------------------------------------------------
 // Config
-// ---------------------------------------------------------------------------
-
 const MODEL      = process.env.SPECODE_MODEL     || "gemma2:2b";
 const OLLAMA_URL = process.env.OLLAMA_BASE_URL   || "http://localhost:11434";
 const VERBOSITY  = process.env.SPECODE_VERBOSITY || "medium";
@@ -175,7 +146,6 @@ if (isResume && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
   process.exit(1);
 }
 
-// ---------------------------------------------------------------------------
 // Ollama: health check + structured streaming
 //
 // Two modes depending on what the model supports:
@@ -184,8 +154,6 @@ if (isResume && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 //
 // We try streaming first. If the model doesn't support it with schema, Ollama
 // returns a non-streamed response anyway and we handle both.
-// ---------------------------------------------------------------------------
-
 const RESPONSE_SCHEMA = {
   type: "object",
   required: ["question", "targetNodeId", "nodeUpdate", "newChildren", "sharedPatternDetected", "reasoning"],
@@ -271,10 +239,7 @@ async function ollamaStream(messages, onToken) {
   return full;
 }
 
-// ---------------------------------------------------------------------------
 // Spec tree (mirrors core/src/tree — kept in sync manually)
-// ---------------------------------------------------------------------------
-
 const KIND_PRIORITY = {
   intent: 100, platform: 90, "user-role": 80, "tech-stack": 75,
   feature: 70, flow: 60, "data-model": 55, integration: 50,
@@ -384,19 +349,13 @@ function insertChild(nodes, parentId, child) {
   });
 }
 
-// ---------------------------------------------------------------------------
 // Prompts (mirrors core/src/prompts)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Verbosity controls SPECIFICATION DEPTH — how many sub-questions per node.
 //
 // low:    one answer → complete. Fast broad strokes. "web" is enough.
 // medium: one level of follow-up. "web" → "which framework?" then done.
 // high:   drill until code-generatable. "web" → framework → version →
 //         routing strategy → deployment target → env config. No assumptions.
-// ---------------------------------------------------------------------------
-
 const VERBOSITY_DEPTH = {
   low: `
 DEPTH: low — accept the first answer given for any node. Mark it complete immediately.
@@ -487,12 +446,8 @@ TOP GAPS:
 ${gapList || "  (none)"}`;
 }
 
-
-// ---------------------------------------------------------------------------
 // Turn modes — the engine decides what the model must do this turn.
 // The model never decides what node to target or whether an answer is done.
-// ---------------------------------------------------------------------------
-
 function buildMessages(tree, gaps, history, turnMode) {
   const messages = [
     { role: "system", content: buildSystemPrompt(tree.verbosity) },
@@ -614,11 +569,8 @@ function parseLLMResponse(raw) {
   };
 }
 
-// ---------------------------------------------------------------------------
 // Apply mutations from LLM response to the tree
 // Returns { tree, mutations[] }
-// ---------------------------------------------------------------------------
-
 function applyMutations(tree, parsed) {
   const mutations = [];
 
@@ -658,10 +610,7 @@ function applyMutations(tree, parsed) {
   return { tree, mutations };
 }
 
-// ---------------------------------------------------------------------------
 // Persistence — atomic writes, never corrupt state
-// ---------------------------------------------------------------------------
-
 function sessionDir(id)  { return path.join(SPECS_DIR, id); }
 
 function writeAtomic(filePath, content) {
@@ -723,10 +672,7 @@ function loadExistingSession(sessionId) {
   return { tree, meta, history };
 }
 
-// ---------------------------------------------------------------------------
 // Terminal output
-// ---------------------------------------------------------------------------
-
 const C = {
   reset:  "\x1b[0m",  bold:  "\x1b[1m",  dim:    "\x1b[2m",
   cyan:   "\x1b[36m", green: "\x1b[32m",  yellow: "\x1b[33m",
@@ -775,10 +721,7 @@ function header(tree, sessionId) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Main
-// ---------------------------------------------------------------------------
-
 async function run() {
   // Health check before doing anything else
   process.stdout.write(`${C.gray}Checking Ollama...${C.reset} `);
