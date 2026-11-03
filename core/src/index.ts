@@ -1,5 +1,20 @@
+/**
+ * SPECODE — Engine
+ *
+ * Orchestrates the full spec elicitation loop:
+ *   1. Initialize a tree from user intent
+ *   2. Analyze gaps → find the highest-priority unknown
+ *   3. Build a context-rich prompt and call the LLM
+ *   4. Parse the structured response and apply mutations to the tree
+ *   5. Detect and hoist shared patterns
+ *   6. Emit events so UIs (CLI, web) can re-render reactively
+ *   7. Repeat until the tree is complete
+ *
+ * The engine is completely UI-agnostic. All communication is through events.
+ * External callers never mutate the tree directly — they call engine methods.
+ */
 
-import EventEmitter from "eventemitter3";
+import { EventEmitter } from "events";
 import {
   SpecTree,
   EngineSession,
@@ -21,7 +36,10 @@ import {
   ParsedLLMResponse,
 } from "./prompts/index.js";
 
+// ---------------------------------------------------------------------------
 // Engine events
+// ---------------------------------------------------------------------------
+
 export type EngineEvent =
   | { type: "tree:updated";    tree: SpecTree }
   | { type: "question:ready";  question: string; targetNodeId: string | null }
@@ -30,7 +48,10 @@ export type EngineEvent =
   | { type: "spec:complete";   tree: SpecTree }
   | { type: "error";           message: string };
 
+// ---------------------------------------------------------------------------
 // Engine
+// ---------------------------------------------------------------------------
+
 export class Engine extends EventEmitter {
   private session: EngineSession;
 
@@ -89,16 +110,6 @@ export class Engine extends EventEmitter {
 
   getConversation(): ConversationTurn[] {
     return [...this.session.conversation];
-  }
-
-  restore(tree: SpecTree, conversation: ConversationTurn[]): void {
-    this.session = {
-      ...this.session,
-      tree: structuredClone(tree),
-      conversation: structuredClone(conversation),
-      verbosity: tree.verbosity,
-    };
-    this.emit("tree:updated", this.getTree());
   }
 
   // -------------------------------------------------------------------------

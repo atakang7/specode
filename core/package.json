@@ -6,11 +6,10 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev":   "tsc --watch"
   },
   "dependencies": {
-    "uuid": "^9.0.0",
-    "eventemitter3": "^5.0.1"
+    "uuid": "^9.0.0"
   },
   "devDependencies": {
     "@types/uuid": "^9.0.0",
