@@ -11,6 +11,8 @@
   "scripts": {
     "build": "npm run build --workspaces",
     "dev:cli": "npm run dev --workspace=cli",
-    "dev:web": "npm run dev --workspace=web"
+    "dev:web": "npm run dev --workspace=web",
+    "test": "node --test runner/test/*.test.mjs",
+    "check:runner": "node --check runner/run.mjs"
   }
 }
