@@ -14,5 +14,8 @@
     "dev:web": "npm run dev --workspace=web",
     "test": "npm run build && node --test runner/test/*.test.mjs core/test/*.test.mjs",
     "check:runner": "node --check runner/run.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0"
   }
 }

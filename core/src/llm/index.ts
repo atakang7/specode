@@ -2,7 +2,8 @@
 import { LLMProvider, LLMMessage, LLMResponse } from "../types/index.js";
 
 function requestTimeoutMs(): number {
-  const ms = Number(process.env.SPECODE_HTTP_TIMEOUT_MS ?? 120000);
+  const raw = typeof process === "undefined" ? undefined : process.env.SPECODE_HTTP_TIMEOUT_MS;
+  const ms = Number(raw ?? 120000);
   if (!Number.isSafeInteger(ms) || ms < 1000) {
     throw new Error("SPECODE_HTTP_TIMEOUT_MS must be an integer of at least 1000");
   }

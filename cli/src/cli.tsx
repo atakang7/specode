@@ -24,7 +24,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
-import { render, Box, Text, useInput, useApp } from "ink";
+import { render, Box, Text, useApp } from "ink";
 import TextInput from "ink-text-input";
 import {
   Engine,
@@ -50,15 +50,14 @@ if (!rawIntent) {
   process.exit(1);
 }
 
-let provider;
-try {
-  provider = createProviderFromEnv();
-} catch (err) {
-  console.error(
-    `Provider error: ${err instanceof Error ? err.message : String(err)}`
-  );
-  process.exit(1);
-}
+const provider = (() => {
+  try {
+    return createProviderFromEnv();
+  } catch (err) {
+    console.error(`Provider error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+})();
 
 const engine = new Engine(provider, verbosity);
 

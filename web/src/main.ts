@@ -28,7 +28,7 @@ import {
   SpecNode,
   ConversationTurn,
   VerbosityLevel,
-  createProviderFromEnv,
+  OllamaProvider,
 } from "@specode/core";
 
 // ---------------------------------------------------------------------------
@@ -74,8 +74,9 @@ el.verbosityBtns.forEach((btn) => {
 let engine: Engine;
 
 try {
-  const provider = createProviderFromEnv();
-  engine = new Engine(provider, "medium");
+  const model = import.meta.env.VITE_OLLAMA_MODEL || "gemma2:2b";
+  const baseUrl = import.meta.env.VITE_OLLAMA_BASE_URL || "http://localhost:11434";
+  engine = new Engine(new OllamaProvider(model, baseUrl), "medium");
 } catch (err) {
   showFatal(err instanceof Error ? err.message : String(err));
   // Stop here — engine is undefined, event handlers are never attached
@@ -129,7 +130,8 @@ const intentParam = new URLSearchParams(window.location.search).get("intent")?.t
 const savedState  = loadFromStorage();
 
 if (savedState) {
-  // Resume from localStorage
+  // Restore the engine as well as the visible tree.
+  engine.restore(savedState.tree, savedState.conversation);
   renderTree(savedState.tree);
   updateCoverage(savedState.tree);
   for (const turn of savedState.conversation) {
@@ -279,7 +281,7 @@ function showFatal(msg: string): void {
   app.innerHTML = `<div style="padding:32px;color:#f04a4a;font-family:monospace;white-space:pre-wrap">
 Fatal error: ${esc(msg)}
 
-Check your environment variables (SPECODE_PROVIDER, ANTHROPIC_API_KEY, etc.)
+Check Ollama and the VITE_OLLAMA_BASE_URL setting
 and reload the page.
   </div>`;
 }

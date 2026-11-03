@@ -14,7 +14,7 @@
  * External callers never mutate the tree directly — they call engine methods.
  */
 
-import { EventEmitter } from "events";
+import EventEmitter from "eventemitter3";
 import {
   SpecTree,
   EngineSession,
@@ -110,6 +110,16 @@ export class Engine extends EventEmitter {
 
   getConversation(): ConversationTurn[] {
     return [...this.session.conversation];
+  }
+
+  restore(tree: SpecTree, conversation: ConversationTurn[]): void {
+    this.session = {
+      ...this.session,
+      tree: structuredClone(tree),
+      conversation: structuredClone(conversation),
+      verbosity: tree.verbosity,
+    };
+    this.emit("tree:updated", this.getTree());
   }
 
   // -------------------------------------------------------------------------
